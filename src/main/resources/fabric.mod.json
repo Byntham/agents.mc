@@ -1,0 +1,21 @@
+{
+	"schemaVersion": 1,
+	"id": "agentsmc",
+	"version": "${version}",
+	"name": "Agents MC",
+	"description": "Lets AI agents join your world as players, perceive it as structured data, and build alongside you. Exposes an MCP server on localhost.",
+	"authors": ["graham"],
+	"license": "MIT",
+	"icon": "assets/agentsmc/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": ["dev.agentsmc.AgentsMc"]
+	},
+	"mixins": ["agentsmc.mixins.json"],
+	"depends": {
+		"fabricloader": ">=0.19.5",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}
