@@ -103,6 +103,8 @@ public final class AgentCamera implements Screenshots.Camera {
 			return;
 		}
 		if (job.started == 0) job.started = job.lastBusy = Util.getMillis();
+		// Before the host's first frame in a level, the renderer isn't set up for one.
+		if (!mc.gameRenderer.mainCamera().isInitialized()) return;
 		if (((Graph) mc.levelRenderer.sectionOcclusionGraph()).agentsmc$busy()) return;
 		try {
 			if (capture(mc, job)) job = null;
