@@ -64,6 +64,8 @@ public final class AgentManager {
 		AgentPlayer agent = new AgentPlayer(server, level, profile, this);
 		if (diedAs != null) {
 			agent.restoreFrom(diedAs, false);
+			// restoreFrom doesn't carry /tag tags; vanilla's PlayerList.respawn copies them separately.
+			for (String tag : diedAs.entityTags()) agent.addTag(tag);
 		} else {
 			// Restore inventory, health, XP etc. from a previous session, as vanilla's PrepareSpawnTask does.
 			try (ProblemReporter.ScopedCollector reporter = new ProblemReporter.ScopedCollector(agent.problemPath(), AgentsMc.LOGGER)) {
