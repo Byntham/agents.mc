@@ -44,6 +44,14 @@ public final class AgentManager {
 	}
 
 	public AgentPlayer spawn(String name, ServerLevel level, Vec3 pos, float yaw, GameType mode) {
+		return spawn(name, level, pos, yaw, mode, null);
+	}
+
+	/**
+	 * @param diedAs the body that just died, when respawning: like vanilla, the new body copies only
+	 *               what survives death (per keepInventory) instead of reloading the dead body's save
+	 */
+	private AgentPlayer spawn(String name, ServerLevel level, Vec3 pos, float yaw, GameType mode, AgentPlayer diedAs) {
 		if (!NAME.matcher(name).matches()) {
 			throw new ToolException("Agent names must be 3-16 characters of letters, digits and underscores");
 		}
@@ -54,10 +62,14 @@ public final class AgentManager {
 
 		GameProfile profile = UUIDUtil.createOfflineProfile(name);
 		AgentPlayer agent = new AgentPlayer(server, level, profile, this);
-		// Restore inventory, health, XP etc. from a previous session, as vanilla's PrepareSpawnTask does.
-		try (ProblemReporter.ScopedCollector reporter = new ProblemReporter.ScopedCollector(agent.problemPath(), AgentsMc.LOGGER)) {
-			server.getPlayerList().loadPlayerData(new NameAndId(profile))
-					.ifPresent(tag -> agent.load(TagValueInput.create(reporter, server.registryAccess(), tag)));
+		if (diedAs != null) {
+			agent.restoreFrom(diedAs, false);
+		} else {
+			// Restore inventory, health, XP etc. from a previous session, as vanilla's PrepareSpawnTask does.
+			try (ProblemReporter.ScopedCollector reporter = new ProblemReporter.ScopedCollector(agent.problemPath(), AgentsMc.LOGGER)) {
+				server.getPlayerList().loadPlayerData(new NameAndId(profile))
+						.ifPresent(tag -> agent.load(TagValueInput.create(reporter, server.registryAccess(), tag)));
+			}
 		}
 		// The save may be from a body that just died mid-fall or on fire; start clean.
 		agent.resetFallDistance();
@@ -125,7 +137,7 @@ public final class AgentManager {
 			if (!respawn) return;
 			ServerLevel overworld = server.overworld();
 			BlockPos spawn = overworld.getRespawnData().pos();
-			spawn(name, overworld, Vec3.atBottomCenterOf(spawn), 0, mode);
+			spawn(name, overworld, Vec3.atBottomCenterOf(spawn), 0, mode, agent);
 		});
 	}
 
