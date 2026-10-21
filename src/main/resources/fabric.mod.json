@@ -12,7 +12,10 @@
 		"main": ["dev.agentsmc.AgentsMc"],
 		"client": ["dev.agentsmc.client.AgentsMcClient"]
 	},
-	"mixins": ["agentsmc.mixins.json"],
+	"mixins": [
+		"agentsmc.mixins.json",
+		{"config": "agentsmc.client.mixins.json", "environment": "client"}
+	],
 	"depends": {
 		"fabricloader": ">=0.19.5",
 		"minecraft": "~26.3",

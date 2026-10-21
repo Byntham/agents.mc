@@ -1,0 +1,19 @@
+{
+	"required": true,
+	"package": "dev.agentsmc.client.mixin",
+	"compatibilityLevel": "JAVA_25",
+	"client": [
+		"CameraMixin",
+		"GameRendererAccessor",
+		"GameRendererMixin",
+		"LevelExtractorMixin",
+		"LevelRendererMixin",
+		"MinecraftMixin",
+		"RenderSectionMixin",
+		"SectionOcclusionGraphMixin",
+		"SectionUpdateTrackerMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}

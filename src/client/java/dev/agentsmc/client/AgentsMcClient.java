@@ -2,6 +2,7 @@ package dev.agentsmc.client;
 
 import com.mojang.blaze3d.platform.InputConstants;
 import dev.agentsmc.net.MenuPayloads;
+import dev.agentsmc.perception.Screenshots;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
@@ -12,13 +13,14 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 
-/** The agents menu: opened with K (rebindable) or /agent menu. */
+/** The agents menu (K, or /agent menu) and the camera for agents' screenshots. */
 public final class AgentsMcClient implements ClientModInitializer {
 	private static final KeyMapping.Category CATEGORY = KeyMapping.Category.register(Identifier.fromNamespaceAndPath("agentsmc", "agents"));
 	public static KeyMapping openMenu;
 
 	@Override
 	public void onInitializeClient() {
+		Screenshots.install(new AgentCamera());
 		openMenu = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.agentsmc.menu", InputConstants.KEY_K, CATEGORY));
 		ClientTickEvents.END_CLIENT_TICK.register(mc -> {
 			while (openMenu.consumeClick()) open(mc);

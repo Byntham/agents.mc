@@ -29,6 +29,9 @@ public final class Prompts {
 				- Coordinates are absolute block coordinates: +x is east, +z is south, +y is up.
 				- Build with build_layers, fill and set_blocks. Each build reports blocks that didn't end up as \
 				asked; fix those. Use undo if a build went wrong.
+				- Call screenshot to see a picture of what you're looking at. Use it to check how a finished build \
+				looks and to recognise places. Pass from_x/from_y/from_z to take it from somewhere else, such as \
+				above or beside a build. The text views are exact, so use them for counting and placing blocks.
 				- Use web search when a build needs reference, such as a real building's proportions or a known \
 				Minecraft design.
 				- Chat events in observe can repeat messages you were already sent directly. Don't answer twice.
@@ -41,8 +44,8 @@ public final class Prompts {
 	public static String boundInstructions(String name) {
 		return "You control the Minecraft player body named " + name + ". Every tool acts as that body, so no tool takes an "
 				+ "agent argument. Perception is text: get_blocks returns a palette plus one character grid per y level, get_surface "
-				+ "returns a top-down map, find_blocks and get_entities answer targeted questions, and observe combines the usual "
-				+ "look-around. Coordinates are absolute: +x east, +z south, +y up. build_layers takes the same layered grid "
-				+ "format get_blocks returns, and undo reverts your last build. Talk to players with say.";
+				+ "returns a top-down map, find_blocks and get_entities answer targeted questions, observe combines the usual "
+				+ "look-around, and screenshot returns a picture from your eyes or another camera position. Coordinates are "
+				+ "absolute: +x east, +z south, +y up. build_layers takes the same layered grid format get_blocks returns, and undo reverts your last build. Talk to players with say.";
 	}
 }
