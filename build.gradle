@@ -7,11 +7,30 @@ base {
 }
 
 loom {
+	// The agents menu lives in src/client; everything else runs on the server too.
+	splitEnvironmentSourceSets()
+	mods {
+		"agentsmc" {
+			sourceSet sourceSets.main
+			sourceSet sourceSets.client
+		}
+	}
 	runs {
 		// Dedicated server for headless testing: ./gradlew runServer
 		server {
 			runDir "run/server"
 		}
+	}
+}
+
+fabricApi {
+	// Client game tests (src/gametest) open a real client, create a world and take screenshots:
+	// ./gradlew runClientGameTest. Screenshots land in build/run/clientGameTest/screenshots.
+	configureTests {
+		createSourceSet = true
+		modId = "agentsmc-test"
+		enableGameTests = false
+		enableClientGameTests = true
 	}
 }
 

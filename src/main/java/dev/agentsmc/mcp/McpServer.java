@@ -18,8 +18,11 @@ import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.Function;
 
 /**
  * A minimal, dependency-free MCP server over Streamable HTTP (JSON responses only, no SSE).
@@ -27,6 +30,10 @@ import java.util.concurrent.Executors;
  * <p>Dual-era: modern clients (2026-07-28) send per-request {@code _meta} and may call
  * {@code server/discover}; legacy clients (2025-11-25 and earlier) call {@code initialize} first.
  * The server keeps no sessions in either case, which legacy revisions permit.
+ *
+ * <p>Two kinds of endpoint: {@code /mcp} drives any body (each tool takes an {@code agent} argument),
+ * and {@code /agent/<key>/mcp} is bound to the one body the key was issued for. Bound clients don't
+ * see the {@code agent} argument or the tools that manage bodies, so they can only act as themselves.
  */
 public final class McpServer {
 	public static final String MODERN_VERSION = "2026-07-28";
@@ -41,11 +48,21 @@ public final class McpServer {
 	private final ToolRegistry tools;
 	private final String token;
 	private final String instructions;
+	private final Function<String, String> agentForKey;
+	private final Function<String, String> boundInstructions;
+	private final Map<String, JsonObject> boundSchemas = new ConcurrentHashMap<>();
 
-	public McpServer(String host, int port, String token, ToolRegistry tools, String instructions) throws IOException {
+	/**
+	 * @param agentForKey       the agent name a bound endpoint's key was issued for, or null if the key is unknown
+	 * @param boundInstructions instructions for a client bound to the named agent
+	 */
+	public McpServer(String host, int port, String token, ToolRegistry tools, String instructions,
+					 Function<String, String> agentForKey, Function<String, String> boundInstructions) throws IOException {
 		this.tools = tools;
 		this.token = token == null ? "" : token;
 		this.instructions = instructions;
+		this.agentForKey = agentForKey;
+		this.boundInstructions = boundInstructions;
 		this.http = HttpServer.create(new InetSocketAddress(InetAddress.getByName(host), port), 0);
 		this.executor = Executors.newFixedThreadPool(4, r -> {
 			Thread t = new Thread(r, "agentsmc-mcp");
@@ -53,7 +70,8 @@ public final class McpServer {
 			return t;
 		});
 		http.setExecutor(executor);
-		http.createContext("/mcp", this::handle);
+		http.createContext("/mcp", ex -> handle(ex, null));
+		http.createContext("/agent/", this::handleBound);
 	}
 
 	public void start() {
@@ -69,7 +87,21 @@ public final class McpServer {
 		return http.getAddress().getPort();
 	}
 
-	private void handle(HttpExchange ex) throws IOException {
+	/** {@code /agent/<key>/mcp}: the key picks the body. */
+	private void handleBound(HttpExchange ex) throws IOException {
+		String[] parts = ex.getRequestURI().getPath().split("/");
+		String agent = parts.length == 4 && parts[3].equals("mcp") ? agentForKey.apply(parts[2]) : null;
+		if (agent == null) {
+			try (ex) {
+				send(ex, 404, "text/plain", "Unknown agent endpoint");
+			}
+			return;
+		}
+		handle(ex, agent);
+	}
+
+	/** @param bound the agent this request acts as, or null for the unbound endpoint */
+	private void handle(HttpExchange ex, String bound) throws IOException {
 		try (ex) {
 			// DNS-rebinding protection: browsers always send Origin; only accept local pages.
 			String origin = ex.getRequestHeaders().getFirst("Origin");
@@ -100,12 +132,12 @@ public final class McpServer {
 			if (body.isJsonArray()) {
 				JsonArray out = new JsonArray();
 				for (JsonElement el : body.getAsJsonArray()) {
-					JsonObject r = el.isJsonObject() ? dispatch(el.getAsJsonObject()) : error(null, -32600, "Invalid request", null);
+					JsonObject r = el.isJsonObject() ? dispatch(el.getAsJsonObject(), bound) : error(null, -32600, "Invalid request", null);
 					if (r != null) out.add(r);
 				}
 				response = out.isEmpty() ? null : out;
 			} else if (body.isJsonObject()) {
-				response = dispatch(body.getAsJsonObject());
+				response = dispatch(body.getAsJsonObject(), bound);
 			} else {
 				response = error(null, -32600, "Invalid request", null);
 			}
@@ -120,7 +152,7 @@ public final class McpServer {
 		}
 	}
 
-	private JsonObject dispatch(JsonObject msg) {
+	private JsonObject dispatch(JsonObject msg, String bound) {
 		if (!msg.has("method")) return null; // a response to us; we never send requests
 		JsonElement id = msg.get("id");
 		if (id == null) return null; // notification (e.g. notifications/initialized)
@@ -138,11 +170,11 @@ public final class McpServer {
 
 		try {
 			JsonObject result = switch (method) {
-				case "initialize" -> initialize(params);
-				case "server/discover" -> discover();
+				case "initialize" -> initialize(params, bound);
+				case "server/discover" -> discover(bound);
 				case "ping" -> new JsonObject();
-				case "tools/list" -> toolsList();
-				case "tools/call" -> toolsCall(params);
+				case "tools/list" -> toolsList(bound);
+				case "tools/call" -> toolsCall(params, bound);
 				default -> throw new RpcException(-32601, "Method not found: " + method);
 			};
 			result.addProperty("resultType", "complete");
@@ -159,33 +191,38 @@ public final class McpServer {
 		}
 	}
 
-	private JsonObject initialize(JsonObject params) {
+	private String instructions(String bound) {
+		return bound == null ? instructions : boundInstructions.apply(bound);
+	}
+
+	private JsonObject initialize(JsonObject params, String bound) {
 		String asked = params.has("protocolVersion") ? params.get("protocolVersion").getAsString() : null;
 		JsonObject result = new JsonObject();
 		result.addProperty("protocolVersion", asked != null && LEGACY_VERSIONS.contains(asked) ? asked : LEGACY_VERSIONS.getFirst());
 		result.add("capabilities", capabilities());
 		result.add("serverInfo", serverInfo());
-		result.addProperty("instructions", instructions);
+		result.addProperty("instructions", instructions(bound));
 		return result;
 	}
 
-	private JsonObject discover() {
+	private JsonObject discover(String bound) {
 		JsonObject result = new JsonObject();
 		result.add("supportedVersions", supportedVersions());
 		result.add("capabilities", capabilities());
-		result.addProperty("instructions", instructions);
+		result.addProperty("instructions", instructions(bound));
 		result.addProperty("ttlMs", 60_000);
 		result.addProperty("cacheScope", "private");
 		return result;
 	}
 
-	private JsonObject toolsList() {
+	private JsonObject toolsList(String bound) {
 		JsonArray list = new JsonArray();
 		for (Tool tool : tools.all()) {
+			if (bound != null && !tool.forBoundAgents()) continue;
 			JsonObject t = new JsonObject();
 			t.addProperty("name", tool.name());
 			t.addProperty("description", tool.description());
-			t.add("inputSchema", tool.inputSchema());
+			t.add("inputSchema", bound == null ? tool.inputSchema() : boundSchemas.computeIfAbsent(tool.name(), n -> withoutAgent(tool.inputSchema())));
 			list.add(t);
 		}
 		JsonObject result = new JsonObject();
@@ -195,12 +232,26 @@ public final class McpServer {
 		return result;
 	}
 
-	private JsonObject toolsCall(JsonObject params) {
+	/** A tool's schema with the agent argument removed, for bound clients. */
+	private static JsonObject withoutAgent(JsonObject schema) {
+		JsonObject copy = schema.deepCopy();
+		if (copy.has("properties")) copy.getAsJsonObject("properties").remove("agent");
+		if (copy.has("required")) {
+			JsonArray required = new JsonArray();
+			for (JsonElement r : copy.getAsJsonArray("required")) if (!r.getAsString().equals("agent")) required.add(r);
+			if (required.isEmpty()) copy.remove("required");
+			else copy.add("required", required);
+		}
+		return copy;
+	}
+
+	private JsonObject toolsCall(JsonObject params, String bound) {
 		String name = params.has("name") ? params.get("name").getAsString() : "";
 		Tool tool = tools.get(name);
-		if (tool == null) throw new RpcException(-32602, "Unknown tool: " + name);
+		if (tool == null || bound != null && !tool.forBoundAgents()) throw new RpcException(-32602, "Unknown tool: " + name);
 		JsonObject arguments = params.has("arguments") && params.get("arguments").isJsonObject()
-				? params.getAsJsonObject("arguments") : new JsonObject();
+				? params.getAsJsonObject("arguments").deepCopy() : new JsonObject();
+		if (bound != null) arguments.addProperty("agent", bound);
 
 		String text;
 		boolean isError = false;

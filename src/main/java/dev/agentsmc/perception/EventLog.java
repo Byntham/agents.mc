@@ -14,8 +14,12 @@ public final class EventLog {
 	public static final EventLog DISCARD = new EventLog(null);
 	private static final int CAPACITY = 1000;
 
-	/** {@code actor} is the player who caused the event, if any; agents don't get their own events echoed back. */
-	public record Event(long seq, int tick, String type, String actor, String text) {
+	/**
+	 * {@code actor} is the player who caused the event, if any; agents don't get their own events echoed back.
+	 * {@code restricted} marks chat from a player who isn't allowed to direct the agents the mod runs, so
+	 * those agents don't read it as instructions.
+	 */
+	public record Event(long seq, int tick, String type, String actor, String text, boolean restricted) {
 	}
 
 	private final MinecraftServer server;
@@ -26,9 +30,13 @@ public final class EventLog {
 		this.server = server;
 	}
 
-	public synchronized void add(String type, String actor, String text) {
+	public void add(String type, String actor, String text) {
+		add(type, actor, text, false);
+	}
+
+	public synchronized void add(String type, String actor, String text, boolean restricted) {
 		if (server == null) return;
-		events.addLast(new Event(nextSeq++, server.getTickCount(), type, actor, text));
+		events.addLast(new Event(nextSeq++, server.getTickCount(), type, actor, text, restricted));
 		while (events.size() > CAPACITY) events.removeFirst();
 	}
 
@@ -47,13 +55,18 @@ public final class EventLog {
 	 * The oldest {@code limit} events with seq greater than {@code after}, skipping those caused by
 	 * {@code excludeActor} (may be null). Oldest first, so nothing is skipped when a lot happens.
 	 */
-	public synchronized Page since(long after, String excludeActor, int limit) {
+	public Page since(long after, String excludeActor, int limit) {
+		return since(after, excludeActor, limit, true);
+	}
+
+	/** @param includeRestricted whether to include chat from players who may not direct the mod's agents */
+	public synchronized Page since(long after, String excludeActor, int limit, boolean includeRestricted) {
 		List<Event> out = new ArrayList<>();
 		int remaining = 0;
 		long cursor = after;
 		for (Event e : events) {
 			if (e.seq() <= after) continue;
-			if (excludeActor != null && excludeActor.equalsIgnoreCase(e.actor())) {
+			if (excludeActor != null && excludeActor.equalsIgnoreCase(e.actor()) || e.restricted() && !includeRestricted) {
 				if (out.size() < limit) cursor = e.seq(); // skip own events, but don't re-scan them
 				continue;
 			}

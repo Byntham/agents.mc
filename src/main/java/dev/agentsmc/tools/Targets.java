@@ -14,12 +14,12 @@ import java.util.List;
  * Lets tools take a player name as a target. Positions move constantly, so tools resolve names at
  * call time instead of making agents copy coordinates that may already be stale.
  */
-final class Targets {
+public final class Targets {
 	private Targets() {
 	}
 
 	/** An online player (human or agent) by name, case-insensitive. */
-	static ServerPlayer player(Session s, String name) {
+	public static ServerPlayer player(Session s, String name) {
 		ServerPlayer p = s.server.getPlayerList().getPlayerByName(name);
 		if (p != null) return p;
 		List<String> online = new ArrayList<>();
@@ -39,7 +39,7 @@ final class Targets {
 	 * A spot about {@code distance} blocks in front of the player where a body fits. Starts level with
 	 * their feet and steps up out of terrain, so a spot on a hillside isn't inside the hill.
 	 */
-	static Vec3 inFrontOf(ServerPlayer p, double distance) {
+	public static Vec3 inFrontOf(ServerPlayer p, double distance) {
 		Vec3 look = p.getLookAngle().multiply(1, 0, 1);
 		if (look.lengthSqr() < 1e-6) look = new Vec3(0, 0, 1); // looking straight up or down
 		Vec3 pos = p.position().add(look.normalize().scale(distance));
@@ -57,7 +57,7 @@ final class Targets {
 	}
 
 	/** Minecraft yaw (0 south, 90 west, 180 north, -90 east) that faces from one point toward another. */
-	static float yawToward(Vec3 from, Vec3 to) {
+	public static float yawToward(Vec3 from, Vec3 to) {
 		return (float) Math.toDegrees(Math.atan2(-(to.x - from.x), to.z - from.z));
 	}
 }

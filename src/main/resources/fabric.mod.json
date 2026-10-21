@@ -9,7 +9,8 @@
 	"icon": "assets/agentsmc/icon.png",
 	"environment": "*",
 	"entrypoints": {
-		"main": ["dev.agentsmc.AgentsMc"]
+		"main": ["dev.agentsmc.AgentsMc"],
+		"client": ["dev.agentsmc.client.AgentsMcClient"]
 	},
 	"mixins": ["agentsmc.mixins.json"],
 	"depends": {
