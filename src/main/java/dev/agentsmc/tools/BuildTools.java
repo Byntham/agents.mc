@@ -200,7 +200,12 @@ public final class BuildTools {
 				BlockState current = level.getBlockState(pos);
 				BlockState updated = Block.updateFromNeighbourShapes(current, level, pos);
 				if (updated != current) {
-					before.putIfAbsent(pos, current);
+					// Reshaping can remove a block (a sign whose support is gone); keep its data for undo too.
+					if (!before.containsKey(pos)) {
+						before.put(pos, current);
+						BlockEntity be = level.getBlockEntity(pos);
+						if (be != null) entities.put(pos, be.saveWithFullMetadata(level.registryAccess()));
+					}
 					level.setBlock(pos, updated, SET_FLAGS);
 				}
 			}

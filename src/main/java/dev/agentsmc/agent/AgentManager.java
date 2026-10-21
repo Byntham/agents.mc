@@ -64,6 +64,9 @@ public final class AgentManager {
 		agent.clearFire();
 		agent.setDeltaMovement(Vec3.ZERO);
 		if (agent.getHealth() <= 0) agent.setHealth(agent.getMaxHealth());
+		// Leaving the End for the first time shows the credits and waits for the client to dismiss
+		// them, with the player removed from the world meanwhile. An agent has no client, so skip them.
+		agent.seenCredits = true;
 		agent.snapTo(pos, yaw, 0);
 		FakeConnection connection = new FakeConnection(reason -> server.execute(() -> onKicked(agent, reason.getString())));
 		server.getPlayerList().placeNewPlayer(connection, agent, new CommonListenerCookie(profile, 0, agent.clientInformation(), false));
@@ -79,6 +82,12 @@ public final class AgentManager {
 		AgentPlayer agent = agents.remove(key(name));
 		if (agent == null) throw new ToolException("No agent named " + name);
 		disconnect(agent, reason);
+	}
+
+	/** A human with this name just joined: remove any agent using it. */
+	public void yieldName(String name) {
+		AgentPlayer agent = agents.remove(key(name));
+		if (agent != null) disconnect(agent, "A player named " + name + " joined");
 	}
 
 	/** /kick, a ban, or a human logging in with the same name. Runs at most once per body. */

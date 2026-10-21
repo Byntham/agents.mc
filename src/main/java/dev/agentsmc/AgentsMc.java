@@ -46,8 +46,13 @@ public class AgentsMc implements ModInitializer {
 		// /say, /me and the like, from players or the console.
 		ServerMessageEvents.COMMAND_MESSAGE.register((message, source, params) ->
 				events().add("chat", source.getTextName(), source.getTextName() + ": " + message.signedContent()));
-		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
-				events().add("join", handler.player.getName().getString(), describe(handler.player) + " joined"));
+		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
+			events().add("join", handler.player.getName().getString(), describe(handler.player) + " joined");
+			// On an online-mode server a human's UUID differs from the agent's offline one, so vanilla
+			// doesn't treat this as a duplicate login. The human keeps the name; the agent leaves.
+			Session s = session;
+			if (s != null && !AgentManager.isAgent(handler.player)) s.agents.yieldName(handler.player.getName().getString());
+		});
 		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
 			// Agents log their own leave in AgentManager.
 			if (!AgentManager.isAgent(handler.player)) events().add("leave", handler.player.getName().getString(), describe(handler.player) + " left");
