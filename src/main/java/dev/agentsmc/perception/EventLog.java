@@ -33,15 +33,40 @@ public final class EventLog {
 	}
 
 	/**
-	 * Events with seq greater than {@code after}, oldest first, skipping those caused by
-	 * {@code excludeActor} (may be null); if more than {@code limit}, the most recent ones.
+	 * One page of unread events.
+	 *
+	 * @param events    oldest first
+	 * @param cursor    the seq to read after next time
+	 * @param remaining matching events after this page
+	 * @param lost      whether events after the old cursor were already evicted from the buffer
 	 */
-	public synchronized List<Event> since(long after, String excludeActor, int limit) {
+	public record Page(List<Event> events, long cursor, int remaining, boolean lost) {
+	}
+
+	/**
+	 * The oldest {@code limit} events with seq greater than {@code after}, skipping those caused by
+	 * {@code excludeActor} (may be null). Oldest first, so nothing is skipped when a lot happens.
+	 */
+	public synchronized Page since(long after, String excludeActor, int limit) {
 		List<Event> out = new ArrayList<>();
+		int remaining = 0;
+		long cursor = after;
 		for (Event e : events) {
-			if (e.seq() > after && (excludeActor == null || !excludeActor.equalsIgnoreCase(e.actor()))) out.add(e);
+			if (e.seq() <= after) continue;
+			if (excludeActor != null && excludeActor.equalsIgnoreCase(e.actor())) {
+				if (out.size() < limit) cursor = e.seq(); // skip own events, but don't re-scan them
+				continue;
+			}
+			if (out.size() < limit) {
+				out.add(e);
+				cursor = e.seq();
+			} else {
+				remaining++;
+			}
 		}
-		return out.size() > limit ? new ArrayList<>(out.subList(out.size() - limit, out.size())) : out;
+		if (remaining == 0) cursor = Math.max(cursor, nextSeq - 1);
+		boolean lost = !events.isEmpty() && events.peekFirst().seq() > after + 1 && after < nextSeq - 1;
+		return new Page(out, cursor, remaining, lost);
 	}
 
 	public synchronized long lastSeq() {

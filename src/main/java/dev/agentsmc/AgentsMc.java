@@ -43,6 +43,9 @@ public class AgentsMc implements ModInitializer {
 
 		ServerMessageEvents.CHAT_MESSAGE.register((message, sender, params) ->
 				events().add("chat", sender.getName().getString(), sender.getName().getString() + ": " + message.signedContent()));
+		// /say, /me and the like, from players or the console.
+		ServerMessageEvents.COMMAND_MESSAGE.register((message, source, params) ->
+				events().add("chat", source.getTextName(), source.getTextName() + ": " + message.signedContent()));
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
 				events().add("join", handler.player.getName().getString(), describe(handler.player) + " joined"));
 		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {

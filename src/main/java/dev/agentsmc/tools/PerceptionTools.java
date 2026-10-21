@@ -61,6 +61,7 @@ public final class PerceptionTools {
 					if (args.has("palette")) {
 						for (Map.Entry<String, JsonElement> e : args.object("palette").entrySet()) {
 							if (e.getKey().length() != 1 || e.getKey().equals(" ")) throw new ToolException("Palette keys must be single non-space characters");
+							if (e.getKey().equals(".")) continue; // always air
 							hints.put(e.getKey().charAt(0), BlockCodec.parseSpec(e.getValue().getAsString()));
 						}
 					}
@@ -126,7 +127,7 @@ public final class PerceptionTools {
 				args -> OnServer.call(s.server, () -> {
 					int limit = args.integer("limit", 50);
 					if (args.has("since") || !args.has("agent")) {
-						return format(s.events.since(args.integer("since", 0), null, limit), s.events.lastSeq());
+						return format(s.events.since(args.integer("since", 0), null, limit));
 					}
 					return drainEvents(s, args.str("agent"), limit);
 				}));
@@ -134,17 +135,19 @@ public final class PerceptionTools {
 
 	private static String drainEvents(Session s, String agent, int limit) {
 		AgentState state = s.agents.state(agent);
-		List<EventLog.Event> events = s.events.since(state.eventCursor, agent, limit);
-		state.eventCursor = s.events.lastSeq();
-		return format(events, state.eventCursor);
+		EventLog.Page page = s.events.since(state.eventCursor, agent, limit);
+		state.eventCursor = page.cursor();
+		return format(page);
 	}
 
-	private static String format(List<EventLog.Event> events, long last) {
-		if (events.isEmpty()) return "No new events (latest seq " + last + ").\n";
+	private static String format(EventLog.Page page) {
 		StringBuilder sb = new StringBuilder();
-		for (EventLog.Event e : events) {
+		if (page.lost()) sb.append("(Some older events were dropped from the buffer before you read them.)\n");
+		if (page.events().isEmpty()) sb.append("No new events.\n");
+		for (EventLog.Event e : page.events()) {
 			sb.append(String.format(Locale.ROOT, "#%d [tick %d] %s: %s\n", e.seq(), e.tick(), e.type(), e.text()));
 		}
+		if (page.remaining() > 0) sb.append(page.remaining()).append(" more unread; call get_events to read them.\n");
 		return sb.toString();
 	}
 

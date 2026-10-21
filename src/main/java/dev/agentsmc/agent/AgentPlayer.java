@@ -28,6 +28,8 @@ public final class AgentPlayer extends ServerPlayer {
 			connection.resetPosition();
 			level().getChunkSource().move(this);
 		}
+		// A client confirms a dimension change; until then vanilla keeps the player invulnerable.
+		if (isChangingDimension()) hasChangedDimension();
 		super.tick();
 		doTick();
 	}

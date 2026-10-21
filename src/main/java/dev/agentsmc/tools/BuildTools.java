@@ -3,6 +3,7 @@ package dev.agentsmc.tools;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import dev.agentsmc.AgentsMc;
 import dev.agentsmc.Session;
 import dev.agentsmc.agent.AgentPlayer;
 import dev.agentsmc.agent.AgentState;
@@ -13,12 +14,16 @@ import dev.agentsmc.util.OnServer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.Registries;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.TagKey;
+import net.minecraft.util.ProblemReporter;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.storage.TagValueInput;
 
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -34,7 +39,8 @@ import java.util.function.Predicate;
  * a normal block update (so sand falls, water flows, redstone reacts). Every edit can be undone.
  */
 public final class BuildTools {
-	private static final int SET_FLAGS = Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE;
+	// Skipping block-entity side effects stops a replaced chest from spilling its items. Undo puts them back instead.
+	private static final int SET_FLAGS = Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE | Block.UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS;
 
 	private BuildTools() {
 	}
@@ -44,6 +50,7 @@ public final class BuildTools {
 				Schema.of().agent(true).raw("blocks", blockListSchema(), true),
 				args -> {
 					JsonArray list = args.array("blocks");
+					if (list.size() > s.config.maxBuildBlocks) throw new ToolException("That is " + list.size() + " blocks; the limit is " + s.config.maxBuildBlocks);
 					Map<BlockPos, BlockCodec.Spec> changes = new LinkedHashMap<>();
 					Map<String, BlockCodec.Spec> cache = new HashMap<>();
 					for (JsonElement el : list) {
@@ -96,7 +103,7 @@ public final class BuildTools {
 				"Build a structure from layered character grids, the same format get_blocks returns. "
 						+ "origin (x,y,z) is the north-west-bottom corner. layers[0] is the bottom layer at y; each layer is a list of rows; "
 						+ "row 0 is the north edge (z), each next row is one block further south (+z); character 0 of a row is at x, then +x eastward. "
-						+ "palette maps single characters to blocks. A space means 'leave unchanged'; '.' means air unless the palette redefines it. "
+						+ "palette maps single characters to blocks. A space means 'leave unchanged' and '.' always means air. "
 						+ "Use block states for orientation, e.g. \"oak_stairs[facing=east]\", \"oak_door[facing=south,half=lower]\".",
 				Schema.of().agent(true).xyz("Origin (north-west-bottom corner)", true)
 						.raw("palette", paletteSchema("Map of single character to block, e.g. {\"#\": \"cobblestone\", \"p\": \"oak_planks\"}"), true)
@@ -107,6 +114,10 @@ public final class BuildTools {
 					for (Map.Entry<String, JsonElement> e : args.object("palette").entrySet()) {
 						if (e.getKey().length() != 1) throw new ToolException("Palette keys must be single characters, got '" + e.getKey() + "'");
 						if (e.getKey().equals(" ")) throw new ToolException("Space is reserved for 'leave unchanged'");
+						if (e.getKey().equals(".")) {
+							if (!BlockCodec.parse(e.getValue().getAsString()).isAir()) throw new ToolException("'.' is reserved for air");
+							continue;
+						}
 						palette.put(e.getKey().charAt(0), BlockCodec.parseSpec(e.getValue().getAsString()));
 					}
 					int ox = args.integer("x"), oy = args.integer("y"), oz = args.integer("z");
@@ -135,24 +146,32 @@ public final class BuildTools {
 					AgentPlayer a = s.agents.get(args.str("agent"));
 					AgentState.Edit edit = s.agents.state(args.str("agent")).popEdit();
 					if (edit == null) return "Nothing to undo.";
+					// Undo where the build happened, even if the agent has since moved to another dimension.
+					ServerLevel level = s.server.getLevel(edit.dimension());
+					if (level == null) return "Can't undo: the dimension it was built in no longer exists.";
 					Map<BlockPos, BlockCodec.Spec> restore = new LinkedHashMap<>();
 					edit.before().forEach((pos, state) -> restore.put(pos, BlockCodec.exact(state)));
-					return applyChanges(s, a, "undo " + edit.description(), restore, false);
+					return applyChanges(s, a, level, "undo " + edit.description(), restore, edit.blockEntities());
 				}));
 	}
 
 	private static String apply(Session s, AgentPlayer agent, String description, Map<BlockPos, BlockCodec.Spec> changes) {
-		return applyChanges(s, agent, description, changes, true);
+		if (changes.size() > s.config.maxBuildBlocks) throw new ToolException("That is " + changes.size() + " blocks; the limit is " + s.config.maxBuildBlocks);
+		return applyChanges(s, agent, agent.level(), description, changes, null);
 	}
 
 	/**
 	 * Applies the changes and reports what happened. For a build (not an undo) it also checks every
 	 * requested position afterwards and lists the ones that didn't end up as asked, so the agent
 	 * doesn't need to read the build back.
+	 *
+	 * @param restoreEntities for an undo, the block-entity data to put back; null for a build
 	 */
-	private static String applyChanges(Session s, AgentPlayer agent, String description, Map<BlockPos, BlockCodec.Spec> changes, boolean isBuild) {
-		ServerLevel level = agent.level();
+	private static String applyChanges(Session s, AgentPlayer agent, ServerLevel level, String description,
+									   Map<BlockPos, BlockCodec.Spec> changes, Map<BlockPos, CompoundTag> restoreEntities) {
+		boolean isBuild = restoreEntities == null;
 		Map<BlockPos, BlockState> before = new LinkedHashMap<>();
+		Map<BlockPos, CompoundTag> entities = new HashMap<>();
 		int outside = 0, unchanged = 0;
 		for (Map.Entry<BlockPos, BlockCodec.Spec> e : changes.entrySet()) {
 			BlockPos pos = e.getKey();
@@ -167,6 +186,8 @@ public final class BuildTools {
 				continue;
 			}
 			before.put(pos, old);
+			BlockEntity be = level.getBlockEntity(pos);
+			if (be != null) entities.put(pos, be.saveWithFullMetadata(level.registryAccess()));
 			level.setBlock(pos, target, SET_FLAGS);
 		}
 		int placed = before.size();
@@ -186,8 +207,9 @@ public final class BuildTools {
 			for (BlockPos pos : before.keySet()) level.updateNeighborsAt(pos, level.getBlockState(pos).getBlock());
 		}
 
+		if (!isBuild) restoreBlockEntities(level, restoreEntities);
 		if (isBuild && !before.isEmpty()) {
-			s.agents.state(agent.getName().getString()).pushEdit(new AgentState.Edit(description, before));
+			s.agents.state(agent.getName().getString()).pushEdit(new AgentState.Edit(description, level.dimension(), before, entities));
 		}
 
 		StringBuilder sb = new StringBuilder();
@@ -205,6 +227,19 @@ public final class BuildTools {
 		if (isBuild) appendMismatches(sb, level, changes);
 		if (isBuild && !before.isEmpty()) sb.append(sb.charAt(sb.length() - 1) == '\n' ? "Call undo to revert." : " Call undo to revert.");
 		return sb.toString();
+	}
+
+	private static void restoreBlockEntities(ServerLevel level, Map<BlockPos, CompoundTag> saved) {
+		saved.forEach((pos, tag) -> {
+			BlockEntity be = level.getBlockEntity(pos);
+			if (be == null) return;
+			try (ProblemReporter.ScopedCollector reporter = new ProblemReporter.ScopedCollector(AgentsMc.LOGGER)) {
+				be.loadWithComponents(TagValueInput.create(reporter, level.registryAccess(), tag));
+			}
+			be.setChanged();
+			BlockState state = level.getBlockState(pos);
+			level.sendBlockUpdated(pos, state, state, Block.UPDATE_CLIENTS);
+		});
 	}
 
 	private static void appendMismatches(StringBuilder sb, ServerLevel level, Map<BlockPos, BlockCodec.Spec> changes) {

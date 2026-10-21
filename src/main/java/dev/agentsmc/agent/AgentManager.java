@@ -65,7 +65,8 @@ public final class AgentManager {
 		agent.setDeltaMovement(Vec3.ZERO);
 		if (agent.getHealth() <= 0) agent.setHealth(agent.getMaxHealth());
 		agent.snapTo(pos, yaw, 0);
-		server.getPlayerList().placeNewPlayer(new FakeConnection(), agent, new CommonListenerCookie(profile, 0, agent.clientInformation(), false));
+		FakeConnection connection = new FakeConnection(reason -> server.execute(() -> onKicked(agent, reason.getString())));
+		server.getPlayerList().placeNewPlayer(connection, agent, new CommonListenerCookie(profile, 0, agent.clientInformation(), false));
 		// A real client sends this once it has rendered the world; until then the player is frozen and invulnerable.
 		agent.connection.handleAcceptPlayerLoad(new ServerboundPlayerLoadedPacket());
 		agent.setGameMode(mode);
@@ -77,6 +78,14 @@ public final class AgentManager {
 	public void despawn(String name, String reason) {
 		AgentPlayer agent = agents.remove(key(name));
 		if (agent == null) throw new ToolException("No agent named " + name);
+		disconnect(agent, reason);
+	}
+
+	/** /kick, a ban, or a human logging in with the same name. Runs at most once per body. */
+	private void onKicked(AgentPlayer agent, String reason) {
+		String key = key(agent.getGameProfile().name());
+		if (agents.get(key) != agent) return;
+		agents.remove(key);
 		disconnect(agent, reason);
 	}
 
