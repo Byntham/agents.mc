@@ -16,6 +16,7 @@ import dev.agentsmc.util.OnServer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.util.Mth;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.LinkedHashMap;
@@ -24,12 +25,15 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 /** Read-only tools that describe the world as text. */
 public final class PerceptionTools {
 	private static final int SCREENSHOT_TIMEOUT_S = 15;
+	/** Each screenshot holds an MCP worker until it's taken, so leave workers free for other calls. */
+	private static final Semaphore SCREENSHOTS = new Semaphore(2);
 
 	private PerceptionTools() {
 	}
@@ -128,7 +132,7 @@ public final class PerceptionTools {
 
 		s.tools.registerWithImage("screenshot",
 				"A picture of what the agent sees, rendered by the host player's game. By default the camera is at the agent's eyes, facing where it faces. "
-						+ "Pass from_x/from_y/from_z to put the camera somewhere else, such as above or beside a build, and at_x/at_y/at_z or at_player to aim it. "
+						+ "Pass from_x/from_y/from_z to put the camera somewhere else, such as above or beside a build, and at_x/at_y/at_z or at_player (not both) to aim it. "
 						+ "Use it to check how a build looks or to recognise a place; use the text views to count and place blocks. "
 						+ "The camera must be in the host player's dimension and within their render distance.",
 				Schema.of().agent(true)
@@ -140,33 +144,11 @@ public final class PerceptionTools {
 					if (camera == null) {
 						throw new ToolException("Screenshots are rendered by the host player's game, and this world runs on a dedicated server, so there is none. Use the text views.");
 					}
-					Pending pending = OnServer.call(s.server, () -> {
-						AgentPlayer a = s.agents.get(args.str("agent"));
-						Vec3 from = point(args, "from");
-						Vec3 at = args.has("at_player") ? playerFace(s, a, args.str("at_player")) : point(args, "at");
-						Vec3 eye = from != null ? from : a.getEyePosition();
-						float yaw = a.getYRot(), pitch = a.getXRot();
-						if (at != null && at.distanceToSqr(eye) > 1e-6) {
-							Vec3 d = at.subtract(eye);
-							yaw = Targets.yawToward(eye, at);
-							pitch = (float) Math.toDegrees(-Math.atan2(d.y, Math.sqrt(d.x * d.x + d.z * d.z)));
-						}
-						// From its own eyes the agent's head would fill the view; from elsewhere its body shows where it is.
-						Screenshots.Shot shot = new Screenshots.Shot(a.level().dimension(), eye, yaw, pitch, from == null ? a.getId() : -1,
-								Screenshots.WIDTH, Screenshots.HEIGHT);
-						double rad = Math.toRadians(yaw);
-						String caption = String.format(Locale.ROOT, "Screenshot from %.1f %.1f %.1f facing %s (yaw %.0f, pitch %.0f), %dx%d.",
-								eye.x, eye.y, eye.z, Views.compass(-Math.sin(rad), Math.cos(rad)), yaw + 0f, pitch + 0f, shot.width(), shot.height());
-						return new Pending(caption, camera.take(shot));
-					});
+					if (!SCREENSHOTS.tryAcquire()) throw new ToolException("Other screenshots are being taken. Try again in a few seconds.");
 					try {
-						return new Tool.Result(pending.caption(), new Tool.Image(pending.jpeg().get(SCREENSHOT_TIMEOUT_S, TimeUnit.SECONDS), "image/jpeg"));
-					} catch (ExecutionException e) {
-						if (e.getCause() instanceof ToolException te) throw te;
-						throw new RuntimeException(e.getCause());
-					} catch (TimeoutException e) {
-						pending.jpeg().cancel(false);
-						throw new ToolException("The host's game didn't render the screenshot within " + SCREENSHOT_TIMEOUT_S + " seconds. It may be minimized or frozen.");
+						return screenshot(s, camera, args);
+					} finally {
+						SCREENSHOTS.release();
 					}
 				});
 
@@ -183,6 +165,45 @@ public final class PerceptionTools {
 					}
 					return drainEvents(s, args.str("agent"), limit);
 				}));
+	}
+
+	private static Tool.Result screenshot(Session s, Screenshots.Camera camera, Args args) {
+		Pending pending = OnServer.call(s.server, () -> {
+			AgentPlayer a = s.agents.get(args.str("agent"));
+			Vec3 from = point(args, "from");
+			if (args.has("at_player") && point(args, "at") != null) throw new ToolException("Pass at_player or at_x/at_y/at_z, not both");
+			Vec3 at = args.has("at_player") ? playerFace(s, a, args.str("at_player")) : point(args, "at");
+			if (from != null && (from.y < a.level().getMinY() - 64 || from.y > a.level().getMaxY() + 256)) {
+				throw new ToolException("from_y must be between " + (a.level().getMinY() - 64) + " and " + (a.level().getMaxY() + 256));
+			}
+			Vec3 eye = from != null ? from : a.getEyePosition();
+			float yaw = Mth.wrapDegrees(a.getYRot()), pitch = a.getXRot();
+			if (at != null && at.distanceToSqr(eye) > 1e-6) {
+				Vec3 d = at.subtract(eye);
+				yaw = Targets.yawToward(eye, at);
+				pitch = (float) Math.toDegrees(-Math.atan2(d.y, Math.sqrt(d.x * d.x + d.z * d.z)));
+			}
+			// From its own eyes the agent's head would fill the view; from elsewhere its body shows where it is.
+			Screenshots.Shot shot = new Screenshots.Shot(a.level().dimension(), eye, yaw, pitch, from == null ? a.getId() : -1,
+					Screenshots.WIDTH, Screenshots.HEIGHT);
+			double rad = Math.toRadians(yaw);
+			String caption = String.format(Locale.ROOT, "Screenshot from %.1f %.1f %.1f facing %s (yaw %.0f, pitch %.0f), %dx%d.",
+					eye.x, eye.y, eye.z, Views.compass(-Math.sin(rad), Math.cos(rad)), yaw + 0f, pitch + 0f, shot.width(), shot.height());
+			return new Pending(caption, camera.take(shot));
+		});
+		try {
+			return new Tool.Result(pending.caption(), new Tool.Image(pending.jpeg().get(SCREENSHOT_TIMEOUT_S, TimeUnit.SECONDS), "image/jpeg"));
+		} catch (ExecutionException e) {
+			if (e.getCause() instanceof ToolException te) throw te;
+			throw new RuntimeException(e.getCause());
+		} catch (TimeoutException e) {
+			pending.jpeg().cancel(false);
+			throw new ToolException("The host's game didn't render the screenshot within " + SCREENSHOT_TIMEOUT_S + " seconds. It may be minimized or frozen.");
+		} catch (InterruptedException e) {
+			pending.jpeg().cancel(false);
+			Thread.currentThread().interrupt();
+			throw new ToolException("The screenshot was cancelled because the world is closing.");
+		}
 	}
 
 	/** A screenshot the host's game is rendering. */

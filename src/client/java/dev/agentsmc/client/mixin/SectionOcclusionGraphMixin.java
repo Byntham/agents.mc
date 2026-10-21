@@ -3,6 +3,7 @@ package dev.agentsmc.client.mixin;
 import dev.agentsmc.client.AgentCamera;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import net.minecraft.client.renderer.SectionOcclusionGraph;
+import net.minecraft.client.renderer.ViewArea;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
 import net.minecraft.client.renderer.state.level.ChunkLoadingRenderState;
 import org.spongepowered.asm.mixin.Final;
@@ -94,6 +95,17 @@ public abstract class SectionOcclusionGraphMixin implements AgentCamera.Graph {
 		if (AgentCamera.active == null) return CompletableFuture.runAsync(task, executor);
 		task.run();
 		return CompletableFuture.completedFuture(null);
+	}
+
+	/**
+	 * The renderer replaced its sections, such as after F3+A or a render distance change. The host's graph
+	 * pointed at the old ones, so there is nothing to put back, and a capture frame doing this drew nothing.
+	 */
+	@Inject(method = "waitAndReset", at = @At("HEAD"))
+	private void agentsmc$dropHostGraph(ViewArea viewArea, CallbackInfo ci) {
+		agentsmc$hostGraph = null;
+		agentsmc$swapped = false;
+		if (AgentCamera.active != null) AgentCamera.graphReset = true;
 	}
 
 	/** During a capture frame, keep track of loaded chunks but leave the graph alone. */

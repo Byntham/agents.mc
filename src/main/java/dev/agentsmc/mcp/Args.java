@@ -38,11 +38,14 @@ public final class Args {
 	}
 
 	public double number(String name) {
+		double d;
 		try {
-			return require(name).getAsDouble();
+			d = require(name).getAsDouble();
 		} catch (NumberFormatException | UnsupportedOperationException e) {
 			throw new ToolException("Argument '" + name + "' must be a number");
 		}
+		if (!Double.isFinite(d)) throw new ToolException("Argument '" + name + "' must be a finite number");
+		return d;
 	}
 
 	public double number(String name, double def) {

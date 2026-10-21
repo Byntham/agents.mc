@@ -32,7 +32,7 @@ import java.util.function.IntPredicate;
  * Calls the screenshot tool over MCP in a real client and checks what the pictures show. They are
  * saved next to the other test screenshots as agent-*.jpg.
  *
- * <p>The host faces south at a gold tower, with a red wall behind them. The renderer only builds
+ * <p>The host faces south at a gold tower, with a red wall far behind them. The renderer only builds
  * terrain the host has in view, so a picture of the wall checks that screenshots build it themselves.
  */
 public class ScreenshotTest implements FabricClientGameTest {
@@ -51,25 +51,32 @@ public class ScreenshotTest implements FabricClientGameTest {
 			int x = host.getX(), y = host.getY(), z = host.getZ();
 			world.getServer().runCommand("tp Player0 " + x + " " + y + " " + z + " 0 0"); // face south
 			world.getServer().runCommand(String.format(Locale.ROOT, "fill %d %d %d %d %d %d gold_block", x - 1, y, z + 8, x + 1, y + 5, z + 10));
-			world.getServer().runCommand(String.format(Locale.ROOT, "fill %d %d %d %d %d %d red_wool", x - 4, y, z - 9, x + 4, y + 4, z - 9));
-			ctx.waitTicks(40);
-			ctx.takeScreenshot("20-host-before");
+			BlockPos wall = new BlockPos(x, y + 5, z - 48);
+			world.getServer().runCommand(String.format(Locale.ROOT, "fill %d %d %d %d %d %d red_wool", x - 10, y, wall.getZ(), x + 10, y + 11, wall.getZ()));
 
 			int port = world.getServer().computeOnServer(server -> AgentsMc.session().mcp.port());
 			call(ctx, port, "spawn_agent", obj("name", "Cam", "x", x + 3.5, "y", y, "z", z + 0.5));
+			call(ctx, port, "look_at", obj("agent", "Cam", "x", x + 0.5, "y", y + 2.5, "z", z + 9.5));
+			ctx.waitTicks(40);
+			// The vignette takes about 20 seconds to settle after joining. Settle it so the host's views compare.
+			ctx.runOnClient(mc -> mc.gui.hud.vignetteBrightness = 0);
+			Path hostBefore = ctx.takeScreenshot("20-host-before");
 
 			// From the agent's eyes, turned toward the tower in front of the host.
-			call(ctx, port, "look_at", obj("agent", "Cam", "x", x + 0.5, "y", y + 2.5, "z", z + 9.5));
 			BufferedImage eyes = screenshot(ctx, port, "agent-1-eyes", obj("agent", "Cam"));
 			expect(eyes, "gold tower", ScreenshotTest::gold, 0.02);
 
 			// Behind the host, where their game hasn't built the terrain.
-			BufferedImage behind = screenshot(ctx, port, "agent-2-behind", obj("agent", "Cam", "at_x", x + 0.5, "at_y", y + 2.0, "at_z", z - 8.5));
+			if (ctx.computeOnClient(mc -> mc.levelRenderer.isSectionCompiledAndVisible(wall, 0))) {
+				throw new AssertionError("The host's game already built the wall behind them, so the next shot can't test building it");
+			}
+			BufferedImage behind = screenshot(ctx, port, "agent-2-behind", obj("agent", "Cam", "at_x", x + 0.5, "at_y", y + 5.0, "at_z", wall.getZ() + 0.5));
 			expect(behind, "red wall", ScreenshotTest::red, 0.02);
 
 			// From above the tower, looking down: the agent's own body shows from here.
-			screenshot(ctx, port, "agent-3-above", obj("agent", "Cam", "from_x", x + 0.5, "from_y", y + 24.0, "from_z", z + 2.5,
+			BufferedImage above = screenshot(ctx, port, "agent-3-above", obj("agent", "Cam", "from_x", x + 0.5, "from_y", y + 24.0, "from_z", z + 2.5,
 					"at_x", x + 0.5, "at_y", (double) y, "at_z", z + 4.5));
+			expect(above, "top of the gold tower", ScreenshotTest::gold, 0.005);
 
 			// Looking back at the host from the tower.
 			screenshot(ctx, port, "agent-4-at-host", obj("agent", "Cam", "from_x", x + 0.5, "from_y", y + 7.0, "from_z", z + 9.5, "at_player", "Player0"));
@@ -78,9 +85,24 @@ public class ScreenshotTest implements FabricClientGameTest {
 			if (!far.get("isError").getAsBoolean()) throw new AssertionError("A camera 5000 blocks away should fail: " + far);
 			LOG.info("Far camera: {}", text(far));
 
+			// The host's blindness isn't part of the agent's view. Without this the tower would be lost in black fog.
+			world.getServer().runCommand("effect give Player0 minecraft:blindness 60 0 true");
+			ctx.waitTicks(5);
+			BufferedImage blind = screenshot(ctx, port, "agent-5-host-blind", obj("agent", "Cam"));
+			expect(blind, "gold tower with the host blinded", ScreenshotTest::gold, 0.02);
+			world.getServer().runCommand("effect clear Player0");
+
 			// The host's own view is unchanged afterwards.
-			ctx.waitTicks(10);
-			ctx.takeScreenshot("21-host-after");
+			ctx.waitTicks(40);
+			String size = ctx.computeOnClient(mc -> mc.getWindow().getWidth() + "x" + mc.getWindow().getHeight()
+					+ " " + mc.gameRenderer.mainRenderTarget().width + "x" + mc.gameRenderer.mainRenderTarget().height);
+			if (!size.equals("1600x900 1600x900")) throw new AssertionError("Window and render target should be back to 1600x900: " + size);
+			ctx.runOnClient(mc -> mc.gui.hud.vignetteBrightness = 0);
+			Path hostAfter = ctx.takeScreenshot("21-host-after");
+			// Compare above the chat, which gained lines in between.
+			double diff = meanDifference(read(hostBefore), read(hostAfter), 0.55);
+			LOG.info("Host view before and after: mean difference {}", String.format(Locale.ROOT, "%.2f", diff));
+			if (diff > 6) throw new AssertionError("The host's view changed after the screenshots: mean difference " + diff);
 		}
 	}
 
@@ -102,6 +124,7 @@ public class ScreenshotTest implements FabricClientGameTest {
 			Files.write(file, jpeg);
 			BufferedImage img = ImageIO.read(new ByteArrayInputStream(jpeg));
 			LOG.info("{}: {}x{}, {} KB", name, img.getWidth(), img.getHeight(), jpeg.length / 1024);
+			if (img.getWidth() != 1280 || img.getHeight() != 720) throw new AssertionError(name + " should be 1280x720");
 			return img;
 		} catch (IOException e) {
 			throw new RuntimeException(e);
@@ -142,6 +165,28 @@ public class ScreenshotTest implements FabricClientGameTest {
 		double found = (double) n / (img.getWidth() * img.getHeight());
 		LOG.info("{}: {}% of pixels", what, String.format(Locale.ROOT, "%.1f", found * 100));
 		if (found < share) throw new AssertionError(String.format(Locale.ROOT, "Expected the %s in the picture, but only %.2f%% of pixels match", what, found * 100));
+	}
+
+	private static BufferedImage read(Path file) {
+		try {
+			return ImageIO.read(file.toFile());
+		} catch (IOException e) {
+			throw new RuntimeException(e);
+		}
+	}
+
+	/** Mean difference per colour channel, from 0 to 255, over the top {@code share} of the pictures. */
+	private static double meanDifference(BufferedImage a, BufferedImage b, double share) {
+		if (a.getWidth() != b.getWidth() || a.getHeight() != b.getHeight()) return 255;
+		int rows = (int) (a.getHeight() * share);
+		long sum = 0;
+		for (int py = 0; py < rows; py++) {
+			for (int px = 0; px < a.getWidth(); px++) {
+				int p = a.getRGB(px, py), q = b.getRGB(px, py);
+				for (int shift = 0; shift <= 16; shift += 8) sum += Math.abs((p >> shift & 255) - (q >> shift & 255));
+			}
+		}
+		return (double) sum / (3L * a.getWidth() * rows);
 	}
 
 	private static boolean gold(int rgb) {

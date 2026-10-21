@@ -3,6 +3,7 @@ package dev.agentsmc.client.mixin;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.GlobalSettingsUniform;
 import net.minecraft.client.renderer.Lightmap;
+import net.minecraft.client.renderer.LightmapRenderStateExtractor;
 import net.minecraft.client.renderer.fog.FogRenderer;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Accessor;
@@ -19,4 +20,7 @@ public interface GameRendererAccessor {
 
 	@Accessor("fogRenderer")
 	FogRenderer agentsmc$fogRenderer();
+
+	@Accessor("lightmapRenderStateExtractor")
+	LightmapRenderStateExtractor agentsmc$lightmapExtractor();
 }

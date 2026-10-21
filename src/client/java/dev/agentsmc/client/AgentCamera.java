@@ -3,8 +3,8 @@ package dev.agentsmc.client;
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.platform.Window;
-import dev.agentsmc.AgentsMc;
 import dev.agentsmc.client.mixin.GameRendererAccessor;
+import dev.agentsmc.client.mixin.LightmapExtractorAccessor;
 import dev.agentsmc.mcp.ToolException;
 import dev.agentsmc.perception.Screenshots;
 import net.minecraft.client.DeltaTracker;
@@ -22,6 +22,7 @@ import javax.imageio.ImageIO;
 import javax.imageio.ImageWriteParam;
 import javax.imageio.ImageWriter;
 import javax.imageio.stream.ImageOutputStream;
+import javax.imageio.stream.MemoryCacheImageOutputStream;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -53,6 +54,8 @@ public final class AgentCamera implements Screenshots.Camera {
 	private static Job job;
 	/** The shot a capture frame is drawing, or null during the host's own frames. Read by the mixins. */
 	public static Screenshots.Shot active;
+	/** Set when a capture frame's extract replaced the renderer's sections, so that frame drew nothing. */
+	public static boolean graphReset;
 
 	/** The section occlusion graph, which the mixins swap to the agent's camera for a capture frame. */
 	public interface Graph {
@@ -104,9 +107,11 @@ public final class AgentCamera implements Screenshots.Camera {
 		try {
 			if (capture(mc, job)) job = null;
 		} catch (RuntimeException e) {
-			AgentsMc.LOGGER.error("Screenshot failed", e);
+			// Rendering may have stopped partway, leaving state the host's frames would draw with,
+			// so crash as vanilla does for an error while rendering.
 			job.result.completeExceptionally(e);
 			job = null;
+			throw e;
 		}
 	}
 
@@ -138,17 +143,22 @@ public final class AgentCamera implements Screenshots.Camera {
 			window.setWidth(shot.width());
 			window.setHeight(shot.height());
 			target.resize(shot.width(), shot.height());
+			GameRendererAccessor renderer = (GameRendererAccessor) mc.gameRenderer;
 			mc.gameRenderer.setRenderBlockOutline(false);
+			// Build this frame's lightmap without the host's effects (see LivingEntityMixin).
+			((LightmapExtractorAccessor) renderer.agentsmc$lightmapExtractor()).agentsmc$setNeedsUpdate(true);
 			mc.gameRenderer.update(DeltaTracker.ONE);
 			mc.gameRenderer.extract(DeltaTracker.ONE, true);
 
 			GameRenderState state = mc.gameRenderer.gameRenderState();
-			GameRendererAccessor renderer = (GameRendererAccessor) mc.gameRenderer;
 			SectionRenderDispatcher dispatcher = mc.levelRenderer.sectionRenderDispatcher();
 			// Sections queued this frame or still waiting to be built, by this frame or the host's.
-			boolean busy = !state.levelRenderState.sectionUpdateRenderStates.isEmpty() || dispatcher != null && !dispatcher.isQueueEmpty();
-			// extract only refreshes the lightmap state when it changed, and expects this frame to draw it.
+			boolean busy = graphReset || !state.levelRenderState.sectionUpdateRenderStates.isEmpty() || dispatcher != null && !dispatcher.isQueueEmpty();
+			graphReset = false;
+			// extract built the lightmap state and expects this frame to draw it.
 			renderer.agentsmc$lightmap().render(state.lightmapRenderState);
+			// The loading screen waits for the section at the host's camera, not this one.
+			state.levelRenderState.playerCompiledSectionCallback = null;
 			// The host's view bobbing, hurt tilt and portal wobble aren't part of the agent's view.
 			state.optionsRenderState.bobView = false;
 			state.levelRenderState.cameraRenderState.entityRenderState.isLiving = false;
@@ -173,7 +183,10 @@ public final class AgentCamera implements Screenshots.Camera {
 			return true;
 		} finally {
 			active = null;
+			graphReset = false;
 			((Graph) mc.levelRenderer.sectionOcclusionGraph()).agentsmc$restore();
+			// The host's frame rebuilds its own lightmap.
+			((LightmapExtractorAccessor) ((GameRendererAccessor) mc.gameRenderer).agentsmc$lightmapExtractor()).agentsmc$setNeedsUpdate(true);
 			mc.gameRenderer.setRenderBlockOutline(true);
 			window.setWidth(width);
 			window.setHeight(height);
@@ -205,7 +218,7 @@ public final class AgentCamera implements Screenshots.Camera {
 		param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
 		param.setCompressionQuality(0.9f);
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		try (ImageOutputStream stream = ImageIO.createImageOutputStream(out)) {
+		try (ImageOutputStream stream = new MemoryCacheImageOutputStream(out)) {
 			writer.setOutput(stream);
 			writer.write(null, new IIOImage(img, null, null), param);
 		} finally {

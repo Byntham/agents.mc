@@ -141,15 +141,19 @@ The renderer keeps state tied to the host's camera. Client mixins hold that stat
 | Mixin | What it does during an extra frame |
 |---|---|
 | `CameraMixin` | Sets the shot's position and angle after the camera follows the host, with a fixed 70° field of view. |
-| `SectionOcclusionGraphMixin` | Vanilla rebuilds the graph of visible sections in the background when the camera moves, which would arrive a frame late. The extra frame builds one for its own camera on the render thread and puts the host's back afterwards. It doesn't wait on the background pool, because terrain builders there can spin until the render thread uploads their meshes. |
+| `SectionOcclusionGraphMixin` | Vanilla rebuilds the graph of visible sections in the background when the camera moves, which would arrive a frame late. The extra frame builds one for its own camera on the render thread and puts the host's back afterwards. It doesn't wait on the background pool, because terrain builders there can spin until the render thread uploads their meshes. If the frame replaces all sections, as F3+A or a render distance change does, the shot keeps going and nothing is put back. |
 | `LevelExtractorMixin` | Builds that graph before the frame is extracted. Hides the agent's own body when the camera is at its eyes. |
 | `LevelRendererMixin`, `SectionUpdateTrackerMixin` | Keep the section grid centred on the host. Recentring on the shot's camera would drop sections at the far edge, and the host would rebuild them next frame. Also skips re-sorting glass and water for the shot's camera. |
 | `RenderSectionMixin` | Draws newly built sections without the fade-in. |
 | `GameRendererMixin` | Skips the host's hand, fire and underwater overlays and crosshair. |
-| `GameRendererAccessor` | Does what a full frame does and `renderLevel` alone doesn't: sets the uniform that holds the camera position, draws the lightmap, and moves the fog and cloud uniforms to their next buffers so the host's frame doesn't overwrite them. |
+| `LivingEntityMixin` | Hides the host's effects from fog, sky and the lightmap, so their blindness, darkness or night vision doesn't show in the shot. |
+| `AtmosphericFogEnvironmentMixin` | Leaves the host's rain fog alone. It eases toward a value for the camera's block each frame. |
+| `GameRendererAccessor`, `LightmapExtractorAccessor` | Do what a full frame does and `renderLevel` alone doesn't: set the uniform that holds the camera position, build and draw the lightmap, and move the fog and cloud uniforms to their next buffers so the host's frame doesn't overwrite them. The host's frame then rebuilds its own lightmap. |
 | `MinecraftMixin` | Runs the extra frames before the host's frame. |
 
-`extract` also copies the host's view bobbing and hurt tilt into the frame, so the extra frame turns those off before drawing.
+`extract` also copies the host's view bobbing and hurt tilt into the frame, so the extra frame turns those off before drawing. It also drops the loading screen's check for a built section at the camera, which is about the host's camera.
+
+At most two screenshot calls run at once, since each holds one of the MCP server's worker threads until its picture is ready.
 
 ### Actions
 
@@ -242,7 +246,7 @@ When the world opens, every saved agent's body comes back where it was, idle. It
 
 `src/gametest` holds a Fabric client game test. It opens a real client, creates agents through the menu, and saves screenshots. It uses `fake_claude.py`, which speaks the stream-json protocol, so the menu can be checked without a model. With `AGENTSMC_LIVE=1` it also runs the real CLI end to end: build, close the world, reopen it, and continue the conversation.
 
-`ScreenshotTest` calls the screenshot tool over MCP from several cameras, including one facing away from the host. It checks each picture for the blocks it placed there and saves it as `agent-*.jpg` next to the other screenshots.
+`ScreenshotTest` calls the screenshot tool over MCP from several cameras and saves the pictures as `agent-*.jpg` next to the other screenshots. It checks most of them for blocks it placed: a gold tower in front of the host, and a red wall 48 blocks behind them that the host's game hasn't built. One shot is taken with the host blinded. Afterwards it checks that the window and render target are back to their size and that the host's view looks the same as before.
 
 ## Roadmap
 
