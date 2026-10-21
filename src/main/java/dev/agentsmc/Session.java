@@ -1,6 +1,7 @@
 package dev.agentsmc;
 
 import dev.agentsmc.agent.AgentManager;
+import dev.agentsmc.brain.Brains;
 import dev.agentsmc.mcp.McpServer;
 import dev.agentsmc.mcp.ToolRegistry;
 import dev.agentsmc.perception.EventLog;
@@ -13,7 +14,9 @@ public final class Session {
 	public final AgentManager agents;
 	public final EventLog events;
 	public final ToolRegistry tools;
-	McpServer mcp;
+	public McpServer mcp;
+	/** Agents the mod runs with Claude Code. */
+	public Brains brains;
 
 	Session(MinecraftServer server, Config config, AgentManager agents, EventLog events, ToolRegistry tools) {
 		this.server = server;

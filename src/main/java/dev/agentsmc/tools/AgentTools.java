@@ -26,7 +26,7 @@ public final class AgentTools {
 	}
 
 	public static void register(Session s) {
-		s.tools.register("spawn_agent",
+		s.tools.registerUnbound("spawn_agent",
 				"Spawn a player-shaped body for an agent. It appears to humans as a normal player (name tag, tab list). "
 						+ "By default it spawns 2 blocks in front of a human player, facing them. Bodies persist until despawned or the world closes.",
 				Schema.of()
@@ -56,7 +56,7 @@ public final class AgentTools {
 					return "Spawned " + name + ".\n" + Views.status(agent);
 				}));
 
-		s.tools.register("despawn_agent", "Remove an agent's body from the world (its inventory and position are saved).",
+		s.tools.registerUnbound("despawn_agent", "Remove an agent's body from the world (its inventory and position are saved).",
 				Schema.of().agent(true),
 				args -> OnServer.call(s.server, () -> {
 					s.agents.despawn(args.str("agent"), "Agent left");
@@ -159,6 +159,10 @@ public final class AgentTools {
 				args -> {
 					if (!s.config.allowCommands) throw new ToolException("run_command is disabled in config/agentsmc.json (allowCommands)");
 					return OnServer.call(s.server, () -> {
+						// Commands run at gamemaster level, so when every player may direct the mod's agents, they don't get them.
+						if (s.brains != null && s.brains.everyone() && s.brains.find(args.str("agent")) != null) {
+							throw new ToolException("run_command is off for agents while every player can direct them (whoCanUseAgents in config/agentsmc.json)");
+						}
 						AgentPlayer a = s.agents.get(args.str("agent"));
 						List<String> output = new ArrayList<>();
 						CommandSource collector = new CommandSource() {

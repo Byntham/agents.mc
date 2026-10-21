@@ -1,15 +1,22 @@
 package dev.agentsmc;
 
 import dev.agentsmc.agent.AgentManager;
+import dev.agentsmc.brain.AgentCommand;
+import dev.agentsmc.brain.Brains;
+import dev.agentsmc.brain.Prompts;
 import dev.agentsmc.mcp.McpServer;
 import dev.agentsmc.mcp.ToolRegistry;
+import dev.agentsmc.net.MenuPayloads;
+import dev.agentsmc.net.MenuServer;
 import dev.agentsmc.perception.BlockCodec;
 import dev.agentsmc.perception.EventLog;
 import dev.agentsmc.tools.AgentTools;
 import dev.agentsmc.tools.BuildTools;
 import dev.agentsmc.tools.PerceptionTools;
 import net.fabricmc.api.ModInitializer;
+import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
@@ -40,12 +47,26 @@ public class AgentsMc implements ModInitializer {
 	public void onInitialize() {
 		ServerLifecycleEvents.SERVER_STARTED.register(AgentsMc::start);
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> stop());
+		ServerTickEvents.END_SERVER_TICK.register(server -> {
+			Session s = session;
+			if (s != null && s.brains != null) s.brains.tick();
+		});
+		MenuPayloads.register();
+		MenuServer.register();
+		CommandRegistrationCallback.EVENT.register((dispatcher, context, selection) -> AgentCommand.register(dispatcher));
 
-		ServerMessageEvents.CHAT_MESSAGE.register((message, sender, params) ->
-				events().add("chat", sender.getName().getString(), sender.getName().getString() + ": " + message.signedContent()));
+		ServerMessageEvents.CHAT_MESSAGE.register((message, sender, params) -> {
+			Session s = session;
+			boolean restricted = s != null && s.brains != null && !s.brains.canUse(sender);
+			events().add("chat", sender.getName().getString(), sender.getName().getString() + ": " + message.signedContent(), restricted);
+			if (s != null && s.brains != null) s.brains.onChat(sender, message.signedContent());
+		});
 		// /say, /me and the like, from players or the console.
-		ServerMessageEvents.COMMAND_MESSAGE.register((message, source, params) ->
-				events().add("chat", source.getTextName(), source.getTextName() + ": " + message.signedContent()));
+		ServerMessageEvents.COMMAND_MESSAGE.register((message, source, params) -> {
+			Session s = session;
+			boolean restricted = s != null && s.brains != null && !s.brains.canUse(source);
+			events().add("chat", source.getTextName(), source.getTextName() + ": " + message.signedContent(), restricted);
+		});
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
 			events().add("join", handler.player.getName().getString(), describe(handler.player) + " joined");
 			// On an online-mode server a human's UUID differs from the agent's offline one, so vanilla
@@ -70,22 +91,31 @@ public class AgentsMc implements ModInitializer {
 		AgentTools.register(s);
 		PerceptionTools.register(s);
 		BuildTools.register(s);
+		s.brains = new Brains(s);
 		try {
-			s.mcp = new McpServer(config.host, config.port, config.token, s.tools, INSTRUCTIONS);
+			s.mcp = new McpServer(config.host, config.port, config.token, s.tools, INSTRUCTIONS, s.brains::agentForKey, Prompts::boundInstructions);
 			s.mcp.start();
 			LOGGER.info("Agents MC: MCP server listening on http://{}:{}/mcp ({} tools)", config.host, s.mcp.port(), s.tools.all().size());
 		} catch (Exception e) {
+			s.mcp = null;
 			LOGGER.error("Agents MC: could not start MCP server on {}:{}", config.host, config.port, e);
 		}
 		session = s;
+		s.brains.restore();
 	}
 
 	private static void stop() {
 		Session s = session;
 		session = null;
 		if (s == null) return;
+		s.brains.shutdown();
 		if (s.mcp != null) s.mcp.stop();
 		s.agents.clear();
+	}
+
+	/** The running server's session, or null when no world is open. */
+	public static Session session() {
+		return session;
 	}
 
 	/** The event log for the running server, or a no-op one if none is running. */

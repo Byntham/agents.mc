@@ -142,12 +142,82 @@ It keeps no sessions. Responses are plain JSON; it offers no SSE stream. It bind
 
 **Threading.** HTTP handlers never touch the world. Each tool call is marshalled onto the server thread with `OnServer.call`, a `CompletableFuture` on the server's executor with a 10-second timeout. Results are rendered there and returned as text.
 
+## Agents run by the mod
+
+Players can also start agents from inside the game. Each one is a Claude Code process on the host's computer, using the host's own `claude` login.
+
+### Why the CLI and not the Agent SDK
+
+The Agent SDK only exists for TypeScript and Python. Both start the same `claude` binary and talk to it over stdin and stdout. The mod is Java, so it starts `claude` itself and speaks the same protocol:
+
+- `claude -p --input-format stream-json --output-format stream-json --verbose`, one process per agent;
+- one JSON user message per line on stdin, and assistant, tool and result events on stdout.
+
+This needs only the CLI the user already has. It gives up the SDK's typed API and its bundled, version-matched binary. The one SDK-only feature the mod uses is the interrupt control message. The mod sends it only when the CLI's `system/init` event lists the `interrupt_receipt_v1` capability. Otherwise it falls back to a `"now"` priority message, which also interrupts the turn.
+
+### One process per agent (`brain/AgentBrain`)
+
+- **Lifecycle.** The process starts on the agent's first message and stays up between messages. After 10 minutes idle it is closed. The next message starts it again with `--resume <session id>`.
+- **Steering.** A message that arrives mid-turn is written with `"priority": "next"`. Claude reads it as soon as the running tool calls finish, in the same turn.
+- **Threads.** Starting, writing and closing the process happen on the agent's own I/O thread, and a second thread reads its output. The server thread doesn't wait on Claude, except when the world closes: it then gives the processes a few seconds to exit.
+- **Failures.** A missing `claude`, a crash or an error result is logged in the menu and sent to the player who last talked to the agent. If a saved session no longer exists (the CLI answers "No conversation found"), the agent starts a new conversation and re-sends what the old one never read.
+
+### What an agent can reach
+
+Anyone who can talk to an agent can try to talk it into something, so the process is locked down:
+
+| Flag | Effect |
+|---|---|
+| `--tools WebSearch,WebFetch` | The only built-in tools. No shell, no file access, no subagents. |
+| `--allowedTools mcp__minecraft,WebSearch,WebFetch` and `--permission-prompts none` | Those run without prompts. Anything else is denied, since nobody is there to answer a prompt. |
+| `--restricted` | Ignores the user's settings files and `CLAUDE.md`, so their hooks, plugins and personal instructions don't apply. |
+| `--strict-mcp-config --mcp-config <file>` | The only MCP server is the agent's own body. |
+| `--disable-slash-commands` | No skills or commands. |
+| `--system-prompt-file` | Replaces Claude Code's coding prompt with one about playing in the world (`brain/Prompts`). |
+
+`--bare` would isolate the session more simply, but it never reads OAuth credentials, so it can't use a subscription login.
+
+### Binding a process to its body
+
+The MCP server has a second endpoint, `/agent/<key>/mcp`. The mod issues a random key each time it starts a process and writes it into that process's MCP config. On this endpoint:
+
+- every tool call gets `agent` set to the key's agent;
+- tool schemas don't show the `agent` argument;
+- `spawn_agent` and `despawn_agent` are hidden.
+
+So an agent's tool calls act as its own body, and it can't spawn or remove bodies. This keeps agents from mixing each other up. It is not a security boundary: `run_command` runs at gamemaster level and can reach any entity, the same as an operator's commands. That is acceptable because only operators can direct agents (see below). When `whoCanUseAgents` is `everyone`, the mod's agents lose `run_command`. Set `allowCommands` to false to take commands away from every agent. The key is revoked when the process exits.
+
+### Talking to agents
+
+- **Chat.** A chat message that @mentions an agent (`@Builder ...`) goes to that agent as `<player> (in chat): ...`. Messages agents send with `say` are system messages, which don't fire chat events, so agents can't trigger each other in a loop.
+- **The menu (`client/AgentsScreen`).** While the menu is open, the client asks for the state twice a second (`menu_request`). The server answers with a JSON snapshot (`menu_state`): every agent's status and current activity, plus the selected agent's activity log. Sending, stopping and creating agents go through `menu_action`. All packets are in `net/MenuPayloads`.
+- **The log.** `ActivityLog` turns the stream into entries the menu shows: player messages, the model's own text, one line per tool call, `say` messages, errors, and "Finished in 12s".
+
+### Who can use them
+
+Agents spend the host's Claude usage and can run operator commands. Commands, chat routing and menu actions check `Brains.canUse`: the player must be an operator or the single-player host, unless `whoCanUseAgents` is `everyone`. The host check matters because in single-player with cheats off the host isn't an operator.
+
+Agents themselves always fail the check. For commands, the check looks at where a command came from (the player who typed it, or the console), not at the entity it runs as. So an agent can't start more agents with `/agent`, whether through `execute as` or a command block it placed. The menu sends agent logs only to players who pass it; others see the list of agents and their status.
+
+Agents also read chat through `observe` and `get_events`. Chat from players who fail that check is marked `restricted` in the event log, and the mod's agents don't see it, so it can't reach them as instructions that way either.
+
+### Saving (`<world>/agentsmc/`)
+
+- `agents.json` lists each agent's name, session id, dimension, position and game mode. It is written when agents change, every 5 minutes, and when the world closes.
+- `agents/<name>/` is the process's working directory. It holds the generated system prompt and MCP config, and `log.json`, the menu history.
+
+When the world opens, every saved agent's body comes back where it was, idle. Its process starts on the next message and resumes the conversation.
+
+### Testing
+
+`src/gametest` holds a Fabric client game test. It opens a real client, creates agents through the menu, and saves screenshots. It uses `fake_claude.py`, which speaks the stream-json protocol, so the menu can be checked without a model. With `AGENTSMC_LIVE=1` it also runs the real CLI end to end: build, close the world, reopen it, and continue the conversation.
+
 ## Roadmap
 
 Rough order:
 
 1. **Survival-mode play:** walking with A* pathfinding over the block grid; mining with tool and break times; placing from inventory; crafting, smelting and containers.
-2. **Push instead of poll:** a `wait_for_events` long-poll tool (or a `subscriptions/listen` stream) so agents can idle until someone talks to them.
+2. **Push instead of poll for outside clients:** agents the mod runs already get messages pushed to them. Outside MCP clients still poll; a `wait_for_events` long-poll tool (or a `subscriptions/listen` stream) would let them idle until someone talks to them.
 3. **Structure I/O:** read and write vanilla `.nbt` structure files and schematics, and copy/paste regions between agents.
 4. **Skins:** fetch textures for a chosen skin so agents look distinct.
 5. **Per-agent permissions:** build regions, a protected area around humans, command allow-lists.

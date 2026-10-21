@@ -127,7 +127,7 @@ public final class PerceptionTools {
 				args -> OnServer.call(s.server, () -> {
 					int limit = args.integer("limit", 50);
 					if (args.has("since") || !args.has("agent")) {
-						return format(s.events.since(args.integer("since", 0), null, limit));
+						return format(s.events.since(args.integer("since", 0), null, limit, !args.has("agent") || !managed(s, args.str("agent"))));
 					}
 					return drainEvents(s, args.str("agent"), limit);
 				}));
@@ -135,9 +135,14 @@ public final class PerceptionTools {
 
 	private static String drainEvents(Session s, String agent, int limit) {
 		AgentState state = s.agents.state(agent);
-		EventLog.Page page = s.events.since(state.eventCursor, agent, limit);
+		EventLog.Page page = s.events.since(state.eventCursor, agent, limit, !managed(s, agent));
 		state.eventCursor = page.cursor();
 		return format(page);
+	}
+
+	/** Agents the mod runs only read chat from players allowed to direct them. */
+	private static boolean managed(Session s, String agent) {
+		return s.brains != null && s.brains.find(agent) != null;
 	}
 
 	private static String format(EventLog.Page page) {

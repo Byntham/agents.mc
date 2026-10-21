@@ -21,6 +21,18 @@ public final class Config {
 	/** Max blocks a single build call may change. */
 	public int maxBuildBlocks = 32768;
 
+	/** Path to the claude executable for agents the mod runs. Empty: look on PATH. */
+	public String claudePath = "";
+	/** Model for those agents, e.g. "opus", "sonnet", "haiku" or a full model id. Empty: Claude Code's default. */
+	public String model = "";
+	/** Reasoning effort: low, medium, high, xhigh or max. Empty: Claude Code's default. */
+	public String effort = "";
+	/**
+	 * Who may create, stop and talk to agents: "ops" (operators and the single-player host) or
+	 * "everyone". Agents run on the host's Claude account.
+	 */
+	public String whoCanUseAgents = "ops";
+
 	public static Config load(Path path) {
 		Config config = new Config();
 		try {

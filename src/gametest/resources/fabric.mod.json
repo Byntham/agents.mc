@@ -1,0 +1,13 @@
+{
+	"schemaVersion": 1,
+	"id": "agentsmc-test",
+	"version": "1.0.0",
+	"name": "Agents MC tests",
+	"environment": "*",
+	"entrypoints": {
+		"fabric-client-gametest": ["dev.agentsmc.test.AgentsMenuTest"]
+	},
+	"depends": {
+		"agentsmc": "*"
+	}
+}
