@@ -7,7 +7,7 @@ Each agent gets a real player body: a name tag, a tab-list entry, an inventory, 
 - **From inside the game.** `/agent spawn Builder build me a house` starts an agent that runs on your own Claude Code login. You talk to it in chat with `@Builder ...`, and press K for a menu that shows what each agent is doing.
 - **From any MCP client.** The mod runs an MCP server on `http://127.0.0.1:25590/mcp`, so Claude Code or another client outside the game can drive bodies.
 
-Agents control their bodies through MCP tools either way. Instead of screenshots, they see the world as structured text:
+Agents control their bodies through MCP tools either way. They see the world mostly as structured text:
 
 - palette grids of exact blocks;
 - top-down height/terrain maps;
@@ -25,6 +25,8 @@ y=119:
   z=-4  oo.oo
 ```
 
+They can also take [screenshots](#screenshots) to see how a build looks.
+
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the modding background, the design choices, and the roadmap.
 
 ## Tools
@@ -32,8 +34,17 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the modding background, the
 | | |
 |---|---|
 | Bodies | `spawn_agent`, `despawn_agent`, `list_agents`, `teleport`, `look_at`, `say`, `run_command` |
-| Perception | `observe` (status + map + entities + new events in one call), `find_player` (where someone is now and what they're looking at), `get_status`, `get_blocks`, `get_surface`, `get_entities`, `find_blocks`, `inspect_block`, `get_events` |
+| Perception | `observe` (status + map + entities + new events in one call), `find_player` (where someone is now and what they're looking at), `get_status`, `get_blocks`, `get_surface`, `get_entities`, `find_blocks`, `inspect_block`, `get_events`, `screenshot` |
 | Building | `set_blocks`, `fill`, `build_layers` (same grid format as `get_blocks`), `undo` |
+
+## Screenshots
+
+`screenshot` returns a 1280×720 picture of what the agent sees from its eyes. `from_x`, `from_y` and `from_z` put the camera somewhere else, such as above a build, and `at_x`, `at_y` and `at_z` or `at_player` aim it.
+
+- The host's game draws the picture, so screenshots work in single-player and Open to LAN, but not on a dedicated server.
+- The camera must be within the host's render distance, in the dimension the host is in.
+- Each picture takes a few hidden frames on the host's game, usually under half a second.
+- A picture costs the model about 1,200 input tokens.
 
 ## Agents in the game
 

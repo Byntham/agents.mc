@@ -36,7 +36,8 @@ public class AgentsMc implements ModInitializer {
 			Start with spawn_agent (or list_agents to reuse a body), then observe to orient yourself.
 			Perception is text: get_blocks returns a palette plus one character grid per y-level, get_surface \
 			returns a top-down height/top-block map, find_blocks and get_entities answer targeted questions, and \
-			get_events reports chat and block changes made by others since your last check.
+			get_events reports chat and block changes made by others since your last check. screenshot returns a \
+			picture from your agent's eyes or another camera position, for checking how a build looks.
 			Coordinates are absolute world block coordinates: +x is east, +z is south, +y is up.
 			Build with set_blocks, fill, or build_layers (which takes the same layered grid format get_blocks returns), \
 			and use undo to revert your last build. Talk to humans with say; they talk to you in chat (see get_events).""";

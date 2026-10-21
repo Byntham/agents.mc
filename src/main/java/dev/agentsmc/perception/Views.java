@@ -287,7 +287,7 @@ public final class Views {
 	}
 
 	/** Compass direction of a horizontal offset. North is -z, east is +x. */
-	private static String compass(double dx, double dz) {
+	public static String compass(double dx, double dz) {
 		if (Math.abs(dx) < 0.5 && Math.abs(dz) < 0.5) return "directly above or below";
 		String[] names = {"south", "south-west", "west", "north-west", "north", "north-east", "east", "south-east"};
 		double yaw = Math.toDegrees(Math.atan2(-dx, dz)); // Minecraft yaw of the offset: 0 south, 90 west

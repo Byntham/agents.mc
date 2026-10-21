@@ -17,6 +17,7 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -253,24 +254,31 @@ public final class McpServer {
 				? params.getAsJsonObject("arguments").deepCopy() : new JsonObject();
 		if (bound != null) arguments.addProperty("agent", bound);
 
-		String text;
+		Tool.Result out;
 		boolean isError = false;
 		try {
-			text = tool.handler().call(new Args(arguments));
+			out = tool.handler().call(new Args(arguments));
 		} catch (ToolException e) {
-			text = e.getMessage();
+			out = new Tool.Result(e.getMessage(), null);
 			isError = true;
 		} catch (Exception e) {
 			AgentsMc.LOGGER.warn("Tool {} failed", name, e);
-			text = "Internal error: " + e;
+			out = new Tool.Result("Internal error: " + e, null);
 			isError = true;
 		}
 
+		JsonArray contents = new JsonArray();
 		JsonObject content = new JsonObject();
 		content.addProperty("type", "text");
-		content.addProperty("text", text);
-		JsonArray contents = new JsonArray();
+		content.addProperty("text", out.text());
 		contents.add(content);
+		if (out.image() != null) {
+			JsonObject image = new JsonObject();
+			image.addProperty("type", "image");
+			image.addProperty("data", Base64.getEncoder().encodeToString(out.image().data()));
+			image.addProperty("mimeType", out.image().mimeType());
+			contents.add(image);
+		}
 		JsonObject result = new JsonObject();
 		result.add("content", contents);
 		result.addProperty("isError", isError);
