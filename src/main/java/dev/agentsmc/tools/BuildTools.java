@@ -59,7 +59,12 @@ public final class BuildTools {
 						changes.put(new BlockPos(o.get("x").getAsInt(), o.get("y").getAsInt(), o.get("z").getAsInt()),
 								cache.computeIfAbsent(block, BlockCodec::parseSpec));
 					}
-					return OnServer.call(s.server, () -> apply(s, s.agents.get(args.str("agent")), "set " + changes.size() + " blocks", changes));
+					return OnServer.call(s.server, () -> {
+						AgentPlayer a = s.agents.get(args.str("agent"));
+						Rules.creativeOnly(s, a, "fill", "place blocks from your inventory with place_block, or mine them with mine.");
+						Rules.creativeOnly(s, a, "set_blocks", "place blocks from your inventory with place_block, one at a time, within reach.");
+						return apply(s, a, "set " + changes.size() + " blocks", changes);
+					});
 				});
 
 		s.tools.register("fill",
@@ -137,13 +142,18 @@ public final class BuildTools {
 						}
 					}
 					if (changes.size() > s.config.maxBuildBlocks) throw new ToolException("Structure has " + changes.size() + " blocks; limit is " + s.config.maxBuildBlocks);
-					return OnServer.call(s.server, () -> apply(s, s.agents.get(args.str("agent")), "build_layers", changes));
+					return OnServer.call(s.server, () -> {
+						AgentPlayer a = s.agents.get(args.str("agent"));
+						Rules.creativeOnly(s, a, "build_layers", "place blocks from your inventory with place_block, one at a time, within reach.");
+						return apply(s, a, "build_layers", changes);
+					});
 				});
 
 		s.tools.register("undo", "Revert the agent's most recent build (set_blocks, fill or build_layers). Can be called repeatedly, up to 32 edits back.",
 				Schema.of().agent(true),
 				args -> OnServer.call(s.server, () -> {
 					AgentPlayer a = s.agents.get(args.str("agent"));
+					Rules.creativeOnly(s, a, "undo", "mine or place blocks to change things back.");
 					AgentState.Edit edit = s.agents.state(args.str("agent")).popEdit();
 					if (edit == null) return "Nothing to undo.";
 					// Undo where the build happened, even if the agent has since moved to another dimension.
