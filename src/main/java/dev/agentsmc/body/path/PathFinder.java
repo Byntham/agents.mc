@@ -8,6 +8,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.DoorBlock;
+import net.minecraft.world.level.block.Fallable;
 import net.minecraft.world.level.block.FenceGateBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.shapes.VoxelShape;
@@ -23,6 +24,10 @@ import java.util.PriorityQueue;
 /**
  * A* over the block grid for a player-sized body (1 wide, 2 tall in block terms).
  *
+ * <p>With {@link Digging}, moves may also pass through solid blocks the way a survival player digs:
+ * 1x2 tunnels, and staircases up and down. The planner never digs the block under the body's own
+ * feet, so it never plans a vertical shaft.
+ *
  * <p>Call {@link #find} on the server thread only. The search reads block states but never
  * changes the world.
  */
@@ -35,6 +40,11 @@ public final class PathFinder {
 	private static final Direction[] HORIZONTAL = {Direction.NORTH, Direction.SOUTH, Direction.WEST, Direction.EAST};
 	/** Diagonal offsets as (dx, dz) pairs. */
 	private static final int[][] DIAGONALS = {{1, 1}, {1, -1}, {-1, 1}, {-1, -1}};
+	/**
+	 * Cost of one second spent breaking blocks, in block units. Walking covers about four blocks a
+	 * second, so a weight above that makes a short walk around preferable to digging through.
+	 */
+	public static final double DIG_WEIGHT = 6.0;
 
 	private PathFinder() {
 	}
@@ -48,8 +58,44 @@ public final class PathFinder {
 	 * mid-air or standing somewhere the rules would reject.
 	 */
 	public static Path find(Level level, BlockPos start, BlockPos goal, double tolerance, Settings settings) {
-		Search s = new Search(level, goal, tolerance, settings);
+		return find(level, start, goal, tolerance, settings, null);
+	}
+
+	/**
+	 * Like {@link #find(Level, BlockPos, BlockPos, double, Settings)}, but moves may break blocks when
+	 * {@code digging} is not null. A solid goal block (something to mine) is never dug through or stood on.
+	 */
+	public static Path find(Level level, BlockPos start, BlockPos goal, double tolerance, Settings settings, Digging digging) {
+		Search s = new Search(level, goal, tolerance, settings, digging);
 		return s.run(start);
+	}
+
+	/**
+	 * Whether breaking this one block is safe by the planner's rules: it can be broken, holds no block
+	 * entity, has no water or lava beside it, and nothing above it would fall into the gap. The
+	 * executor checks this again just before breaking, in case the world changed.
+	 */
+	public static boolean safeToDig(Level level, BlockPos pos) {
+		return digBlocker(level, pos) == null && !fallable(level, pos.above());
+	}
+
+	/** Why a block must not be dug, or null if it may be. Ignores what is above it. */
+	private static String digBlocker(Level level, BlockPos pos) {
+		if (!level.isInWorldBounds(pos) || !level.isLoaded(pos)) return "unloaded";
+		BlockState state = level.getBlockState(pos);
+		if (state.getDestroySpeed(level, pos) < 0) return "unbreakable";
+		if (state.hasBlockEntity()) return "a chest, furnace or other block entity";
+		if (!state.getFluidState().isEmpty()) return "fluid";
+		for (Direction d : Direction.values()) {
+			if (!level.getFluidState(pos.relative(d)).isEmpty()) return "water or lava next to it";
+		}
+		return null;
+	}
+
+	/** Gravel, sand, concrete powder, anvils, dripstone: things that fall when what holds them is gone. */
+	private static boolean fallable(Level level, BlockPos pos) {
+		BlockState state = level.getBlockState(pos);
+		return state.getBlock() instanceof Fallable || state.is(Blocks.POWDER_SNOW);
 	}
 
 	/** One-line summary such as {@code path: 23 nodes, 2 step-ups, 1 drop, reaches goal}. */
@@ -65,6 +111,9 @@ public final class PathFinder {
 		appendCount(sb, counts, MoveType.CLIMB, "climb");
 		appendCount(sb, counts, MoveType.SWIM, "swim");
 		appendCount(sb, counts, MoveType.DOOR, "door");
+		int dig = 0;
+		for (PathNode n : nodes) dig += n.dig().size();
+		if (dig > 0) sb.append(", ").append(dig).append(dig == 1 ? " block to dig" : " blocks to dig");
 		sb.append(String.format(Locale.ROOT, ", cost %.1f", path.cost()));
 		sb.append(path.reachesGoal() ? ", reaches goal" : ", does not reach goal");
 		return sb.toString();
@@ -100,6 +149,7 @@ public final class PathFinder {
 		double g;
 		Node parent;
 		MoveType how;
+		List<BlockPos> dig = List.of();
 		boolean closed;
 
 		Node(BlockPos pos, double h) {
@@ -117,18 +167,32 @@ public final class PathFinder {
 		private final BlockPos goal;
 		private final double toleranceSq;
 		private final Settings cfg;
+		/** Null when only walking is allowed. */
+		private final Digging digging;
+		/** The goal block when it is solid, i.e. the thing being mined: never dug through or stood on. */
+		private final BlockPos protect;
+		/** Heuristic weight; higher when digging, where every step costs several block units. */
+		private final double hWeight;
 		private final Map<Long, Node> nodes = new HashMap<>();
 		private final Map<Long, Cell> cells = new HashMap<>();
+		/** Seconds to break each block, or -1 where the rules forbid digging. */
+		private final Map<Long, Double> digTimes = new HashMap<>();
 		private final PriorityQueue<Node> open = new PriorityQueue<>((a, b) -> {
 			int c = Double.compare(a.f(), b.f());
 			return c != 0 ? c : Double.compare(a.h, b.h);
 		});
 
-		Search(Level level, BlockPos goal, double tolerance, Settings cfg) {
+		Search(Level level, BlockPos goal, double tolerance, Settings cfg, Digging digging) {
 			this.level = level;
 			this.goal = goal;
 			this.toleranceSq = tolerance * tolerance;
 			this.cfg = cfg;
+			this.digging = digging;
+			this.protect = digging != null && cell(goal) == Cell.SOLID ? goal : null;
+			// Weighted toward the goal by what digging through stone costs, so a search through solid
+			// rock heads for the goal instead of flooding outward in every direction.
+			double stone = digging == null ? -1 : digging.seconds(goal, Blocks.STONE.defaultBlockState());
+			this.hWeight = stone > 0 ? HEURISTIC_WEIGHT + stone * DIG_WEIGHT : HEURISTIC_WEIGHT;
 		}
 
 		Path run(BlockPos start) {
@@ -145,15 +209,25 @@ public final class PathFinder {
 				cur.closed = true;
 				expanded++;
 				if (cur.h < best.h) best = cur;
-				if (cur.pos.distSqr(goal) <= toleranceSq) return build(cur, true);
+				if (isGoal(cur.pos)) return build(cur, true);
 				expand(cur);
 			}
 			return build(best, false);
 		}
 
+		/**
+		 * Within tolerance. When digging, never standing on the block being mined, and never below an
+		 * open goal: that would end in a hole dug under the spot instead of on it.
+		 */
+		private boolean isGoal(BlockPos pos) {
+			if (pos.distSqr(goal) > toleranceSq) return false;
+			if (digging == null) return true;
+			return protect != null ? !pos.below().equals(protect) : pos.getY() >= goal.getY();
+		}
+
 		private Path build(Node end, boolean reached) {
 			List<PathNode> out = new ArrayList<>();
-			for (Node n = end; n != null; n = n.parent) out.add(new PathNode(n.pos, n.how));
+			for (Node n = end; n != null; n = n.parent) out.add(new PathNode(n.pos, n.how, n.dig));
 			return new Path(out.reversed(), reached, end.g);
 		}
 
@@ -167,10 +241,14 @@ public final class PathFinder {
 			int dy = Math.abs(p.getY() - goal.getY());
 			int dz = Math.abs(p.getZ() - goal.getZ());
 			double flat = Math.max(dx, dz) + (SQRT2 - 1) * Math.min(dx, dz);
-			return (flat + dy) * HEURISTIC_WEIGHT;
+			return (flat + dy) * hWeight;
 		}
 
 		private void relax(Node from, BlockPos to, double stepCost, MoveType how) {
+			relax(from, to, stepCost, how, List.of());
+		}
+
+		private void relax(Node from, BlockPos to, double stepCost, MoveType how, List<BlockPos> dig) {
 			Node n = node(to);
 			if (n.closed) return;
 			double g = from.g + stepCost;
@@ -178,6 +256,7 @@ public final class PathFinder {
 			n.g = g;
 			n.parent = from;
 			n.how = how;
+			n.dig = dig;
 			open.add(n); // duplicates are skipped on poll via the closed flag
 		}
 
@@ -195,6 +274,7 @@ public final class PathFinder {
 				tryStepUp(cur, side);
 				if (!inWater) tryDrop(cur, side);
 				if (cfg.canJumpGaps() && !inWater && !onLadder) tryJumpGap(cur, d);
+				if (digging != null && !inWater && !onLadder) tryDig(cur, side);
 			}
 			for (int[] dg : DIAGONALS) {
 				BlockPos side = p.offset(dg[0], 0, dg[1]);
@@ -289,6 +369,56 @@ public final class PathFinder {
 					return;
 				}
 			}
+		}
+
+		/**
+		 * The moves a player makes with a pickaxe, toward one horizontal neighbour. Each lists the
+		 * blocks to break top-down, so nothing is left hanging over a gap and each block is in view
+		 * once the one above it is gone. None of them digs the block under the body's own feet.
+		 */
+		private void tryDig(Node cur, BlockPos side) {
+			// A 1x2 tunnel: head, then feet.
+			digMove(cur, side, 1.0, MoveType.WALK, side.above(), side);
+			// A staircase step down: the column ahead from head height down to the new feet.
+			digMove(cur, side.below(), 1.5, MoveType.DROP, side.above(), side, side.below());
+			// A staircase step up: the block above our head (to jump), then the new head and feet.
+			BlockPos up = side.above();
+			digMove(cur, up, 1.5, MoveType.STEP_UP, cur.pos.above(2), up.above(), up);
+		}
+
+		/**
+		 * Relaxes a move into {@code to} that breaks whichever of {@code open} are solid. The new
+		 * floor must already be standable. Skipped when nothing needs breaking, since the walking
+		 * moves cover that.
+		 */
+		private void digMove(Node cur, BlockPos to, double base, MoveType how, BlockPos... open) {
+			BlockPos floor = to.below();
+			if (floor.equals(protect) || !standable(floor)) return;
+			List<BlockPos> dig = new ArrayList<>(open.length);
+			double seconds = 0;
+			for (BlockPos b : open) {
+				if (cell(b) == Cell.AIR) continue;
+				double t = digTime(b);
+				if (t < 0) return;
+				dig.add(b);
+				seconds += t;
+			}
+			if (dig.isEmpty()) return;
+			// Gravel or sand over a block we open would come down on us, unless we dig it first.
+			for (BlockPos b : dig) {
+				if (!dig.contains(b.above()) && fallable(level, b.above())) return;
+			}
+			relax(cur, to, base + seconds * DIG_WEIGHT, how, dig);
+		}
+
+		/** Seconds to break a solid block, or -1 if it must not be dug. Cached per search. */
+		private double digTime(BlockPos pos) {
+			return digTimes.computeIfAbsent(pos.asLong(), k -> {
+				if (cell(pos) != Cell.SOLID || pos.equals(protect) || digBlocker(level, pos) != null) return -1.0;
+				BlockState state = level.getBlockState(pos);
+				if (state.getBlock() instanceof DoorBlock || state.getBlock() instanceof FenceGateBlock) return -1.0;
+				return digging.seconds(pos, state);
+			});
 		}
 
 		/** Up or down inside a ladder column, or off the ladder onto a standable block. */

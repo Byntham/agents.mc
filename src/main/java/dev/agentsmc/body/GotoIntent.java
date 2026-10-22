@@ -7,7 +7,8 @@ import java.util.Locale;
 
 /**
  * Walk to a point, or to a player. A player target is re-read every tick, so "come here" ends up
- * next to where the player is, not where they were when they asked.
+ * next to where the player is, not where they were when they asked. With digging allowed, it digs
+ * a tunnel or staircase when walking can't get there, e.g. back up to the surface from a mine.
  */
 public final class GotoIntent extends Intent {
 	private final Vec3 point;
@@ -35,6 +36,12 @@ public final class GotoIntent extends Intent {
 		this.from = body.agent.position();
 	}
 
+	/** Allow breaking blocks when walking can't get there. */
+	public GotoIntent dig(boolean on) {
+		nav.dig(on ? Navigator.Dig.WHEN_NEEDED : Navigator.Dig.NEVER);
+		return this;
+	}
+
 	@Override
 	public String kind() {
 		return "goto";
@@ -42,8 +49,9 @@ public final class GotoIntent extends Intent {
 
 	@Override
 	public String describe() {
-		if (player != null) return "walking to " + player;
-		return String.format(Locale.ROOT, "walking to %d %d %d", (int) Math.floor(point.x), (int) Math.floor(point.y), (int) Math.floor(point.z));
+		String verb = nav.digging() ? "digging toward " : "walking to ";
+		if (player != null) return verb + player;
+		return String.format(Locale.ROOT, "%s%d %d %d", verb, (int) Math.floor(point.x), (int) Math.floor(point.y), (int) Math.floor(point.z));
 	}
 
 	@Override
@@ -78,9 +86,10 @@ public final class GotoIntent extends Intent {
 		switch (last) {
 			case ARRIVED -> {
 				if (player != null) body.face(body.level().getServer().getPlayerList().getPlayerByName(player));
+				String dug = nav.dug() == 0 ? "" : ", digging through " + nav.dug() + (nav.dug() == 1 ? " block" : " blocks");
 				done(player != null
-						? String.format(Locale.ROOT, "reached %s after %.1fs, %.0f blocks away", player, ticks() / 20.0, current.distanceTo(target))
-						: String.format(Locale.ROOT, "arrived at %.1f %.1f %.1f after %.1fs", current.x, current.y, current.z, ticks() / 20.0));
+						? String.format(Locale.ROOT, "reached %s after %.1fs, %.0f blocks away%s", player, ticks() / 20.0, current.distanceTo(target), dug)
+						: String.format(Locale.ROOT, "arrived at %.1f %.1f %.1f after %.1fs%s", current.x, current.y, current.z, ticks() / 20.0, dug));
 			}
 			case UNREACHABLE -> fail(String.format(Locale.ROOT, "no path to %s; stopped at %.1f %.1f %.1f, %.0f blocks short%s",
 					player != null ? player : String.format(Locale.ROOT, "%.0f %.0f %.0f", target.x, target.y, target.z),
@@ -88,14 +97,21 @@ public final class GotoIntent extends Intent {
 			case STUCK -> fail(String.format(Locale.ROOT, "got stuck at %.1f %.1f %.1f, %.0f blocks from the goal",
 					current.x, current.y, current.z, current.distanceTo(target)));
 			case MOVING -> {
-				if (ticks() > 20 * 180) fail("gave up after 3 minutes, " + progress());
+				// Digging by hand is slow, so a path that digs gets longer.
+				int minutes = nav.digging() ? 10 : 3;
+				if (ticks() > 20 * 60 * minutes) fail("gave up after " + minutes + " minutes, " + progress());
 			}
 		}
 	}
 
+	@Override
+	protected void stop(Body body) {
+		nav.stop();
+	}
+
 	/** The plan, for the tool's first reply. */
 	public String plan() {
-		return nav.describe() + nav.note();
+		return nav.digging() ? nav.summary() : nav.describe() + nav.note();
 	}
 
 	/** Plans now so the tool can report the route; the intent keeps the path. */

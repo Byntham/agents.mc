@@ -54,12 +54,14 @@ public final class BodyTools {
 		s.tools.register("goto",
 				"Walk to a point or to a player, with pathfinding over the terrain (jumps, drops, swimming, doors). A player target is tracked "
 						+ "until you reach them, so it works for 'come here'. Returns at once with an intent id; "
-						+ "the body keeps walking while you do other things. You get a '<id> done/failed' event when it ends, so call wait to let it happen.",
+						+ "the body keeps walking while you do other things. You get a '<id> done/failed' event when it ends, so call wait to let it happen. "
+						+ "If walking can't get there (e.g. you're underground), it digs a tunnel or staircase with the best tool you carry, and says how long that takes.",
 				Schema.of().agent(true)
 						.number("x", "Target x", false).number("y", "Target y (the block your feet should end up in)", false).number("z", "Target z", false)
 						.str("near_player", "Walk to this player instead of coordinates", false)
 						.number("distance", "With near_player: stop this many blocks away (default 2)", false)
-						.number("tolerance", "How close counts as arrived, in blocks (default 1.5)", false),
+						.number("tolerance", "How close counts as arrived, in blocks (default 1.5)", false)
+						.bool("dig", "Dig through blocks when walking can't get there (default true, false in creative)", false),
 				args -> OnServer.call(s.server, () -> {
 					AgentPlayer a = s.agents.get(args.str("agent"));
 					GotoIntent intent;
@@ -77,6 +79,7 @@ public final class BodyTools {
 						a.getAbilities().flying = false;
 						a.onUpdateAbilities();
 					}
+					intent.dig(args.bool("dig", !a.isCreative()));
 					a.body().start(intent);
 					Navigator.State first = intent.planNow(a.body());
 					String plan = switch (first) {
@@ -107,12 +110,14 @@ public final class BodyTools {
 		s.tools.register("mine",
 				"Break blocks the way a survival player does: walk within reach, pick the best tool in the inventory, hold the button for the block's "
 						+ "break time, pick up the drops. Either name a block type to mine the nearest ones (block + count), or give one position (x, y, z). "
-						+ "Returns at once with an intent id; a 'mine#N done' event reports what was mined and picked up.",
+						+ "Returns at once with an intent id; a 'mine#N done' event reports what was mined and picked up. "
+						+ "Buried blocks are reached by digging a staircase or tunnel; the reply says how long that takes, and whether a pickaxe would make it much faster.",
 				Schema.of().agent(true)
 						.str("block", "Block id or #tag to look for, e.g. oak_log, #logs, iron_ore", false)
 						.integer("count", "With block: how many to mine (default 1, max 64)", false)
 						.integer("radius", "With block: search radius (default 16, max 32)", false)
-						.integer("x", "A single block to mine", false).integer("y", "", false).integer("z", "", false),
+						.integer("x", "A single block to mine", false).integer("y", "", false).integer("z", "", false)
+						.bool("dig", "Dig through other blocks to reach buried ones (default true, false in creative)", false),
 				args -> OnServer.call(s.server, () -> {
 					AgentPlayer a = s.agents.get(args.str("agent"));
 					List<BlockPos> targets;
@@ -133,10 +138,12 @@ public final class BodyTools {
 					} else {
 						throw new ToolException("Pass block (and count), or x, y, z");
 					}
-					MineIntent intent = a.body().start(new MineIntent(a.body(), targets, what));
+					MineIntent intent = a.body().start(new MineIntent(a.body(), targets, what).dig(args.bool("dig", !a.isCreative())));
 					BlockPos first = targets.getFirst();
-					return String.format(Locale.ROOT, "%s started: %d block%s of %s, nearest at %d %d %d (%s).", intent.tag(), targets.size(),
-							targets.size() == 1 ? "" : "s", what, first.getX(), first.getY(), first.getZ(), Senses.relative(a, Vec3.atCenterOf(first)));
+					String plan = intent.planNow(a.body());
+					return String.format(Locale.ROOT, "%s started: %d block%s of %s, nearest at %d %d %d (%s)%s.", intent.tag(), targets.size(),
+							targets.size() == 1 ? "" : "s", what, first.getX(), first.getY(), first.getZ(), Senses.relative(a, Vec3.atCenterOf(first)),
+							plan.isEmpty() ? "" : "; " + plan);
 				}));
 
 		s.tools.register("attack",

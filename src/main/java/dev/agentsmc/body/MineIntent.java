@@ -1,10 +1,9 @@
 package dev.agentsmc.body;
 
+import dev.agentsmc.body.path.PathFinder;
 import dev.agentsmc.perception.BlockCodec;
 import dev.agentsmc.perception.Views;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
-import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
@@ -19,31 +18,46 @@ import java.util.Locale;
 
 /**
  * Break blocks like a survival player: walk within reach, look at the block, hold the mouse button
- * for as long as the block takes with the tool in hand, then pick up what dropped.
+ * for as long as the block takes with the tool in hand, then pick up what dropped. With digging
+ * allowed, buried blocks are reached by digging a staircase or tunnel to them, and a block in the
+ * line of sight is broken out of the way.
  */
 public final class MineIntent extends Intent {
-	private static final int COLLECT_TICKS = 50;
-	private static final int BREAK_DELAY = 5;
+	private static final int COLLECT_TICKS = 100;
+	/** In the open, anywhere within reach will do. */
+	private static final double REACH = 3.2;
+	/** Underground, stand right next to the block, or there's stone in between. */
+	private static final double DIG_REACH = 1.5;
 
 	private final List<BlockPos> targets;
 	private final String what;
 	private final Navigator nav;
+	private final Digger digger;
 	private final Inventory snapshot;
+	private boolean dig;
 	private BlockPos current;
 	private BlockState expected;
-	private Direction face = Direction.UP;
-	private float progress;
-	private boolean breaking;
-	private int collectTicks, delay, approachTicks;
-	private int mined, skipped;
+	/** A block in the line of sight that we're breaking out of the way, with digging on. */
+	private BlockPos blocking;
+	private double reach = REACH;
+	private int collectTicks, approachTicks;
+	private int mined, skipped, cleared;
 	private final List<String> skippedWhy = new ArrayList<>();
 
 	/** @param what how the model named the blocks, for messages */
 	public MineIntent(Body body, List<BlockPos> targets, String what) {
 		this.targets = new ArrayList<>(targets);
 		this.what = what;
-		this.nav = new Navigator(body);
+		this.nav = new Navigator(body).digReach(DIG_REACH);
+		this.digger = new Digger(body);
 		this.snapshot = new Inventory(body);
+	}
+
+	/** Allow digging to reach buried blocks. */
+	public MineIntent dig(boolean on) {
+		this.dig = on;
+		nav.dig(on ? Navigator.Dig.WHEN_NEEDED : Navigator.Dig.NEVER);
+		return this;
 	}
 
 	@Override
@@ -53,20 +67,23 @@ public final class MineIntent extends Intent {
 
 	@Override
 	public String describe() {
-		return "mining " + what + (current == null ? "" : " at " + current.getX() + " " + current.getY() + " " + current.getZ());
+		return (nav.digging() ? "digging to " : "mining ") + what + (current == null ? "" : " at " + current.getX() + " " + current.getY() + " " + current.getZ());
 	}
 
 	@Override
 	public String progress() {
-		return mined + "/" + (mined + targets.size() + (current != null ? 1 : 0)) + " broken" + (breaking ? String.format(Locale.ROOT, ", %.0f%%", progress * 100) : "");
+		return mined + "/" + (mined + targets.size() + (current != null ? 1 : 0)) + " broken"
+				+ (digger.breaking() ? String.format(Locale.ROOT, ", %.0f%%", digger.progress() * 100) : "")
+				+ (dug() > 0 ? ", dug " + dug() + " on the way" : "");
+	}
+
+	/** Blocks broken to get at the targets: the way there plus anything in the line of sight. */
+	private int dug() {
+		return nav.dug() + cleared;
 	}
 
 	@Override
 	protected void tick(Body body) {
-		if (delay > 0) {
-			delay--;
-			return;
-		}
 		if (collectTicks > 0) {
 			collectTicks--;
 			if (collectDrops(body)) return;
@@ -75,7 +92,8 @@ public final class MineIntent extends Intent {
 		if (current == null) {
 			if (!pickNext(body)) {
 				String gained = snapshot.gained(body);
-				done(String.format(Locale.ROOT, "mined %d %s%s%s", mined, what, gained.isEmpty() ? "" : ", picked up " + gained,
+				done(String.format(Locale.ROOT, "mined %d %s%s%s%s", mined, what, gained.isEmpty() ? "" : ", picked up " + gained,
+						dug() == 0 ? "" : "; dug through " + dug() + " other block" + (dug() == 1 ? "" : "s") + " to get there",
 						skipped == 0 ? "" : "; skipped " + skipped + " (" + String.join("; ", skippedWhy) + ")"));
 			}
 			return;
@@ -84,22 +102,24 @@ public final class MineIntent extends Intent {
 		BlockState state = body.level().getBlockState(current);
 		if (state.isAir() || !state.is(expected.getBlock())) {
 			// Someone else got it, or it fell. Count it if it's gone.
-			if (breaking) stopBreaking(body);
+			digger.abort();
 			if (state.isAir()) mined++;
 			current = null;
 			collectTicks = COLLECT_TICKS;
 			return;
 		}
 
-		Vec3 centre = Vec3.atCenterOf(current);
 		BlockHitResult sight = body.inReach(current) ? body.sight(current) : null;
 		if (sight == null) {
-			if (breaking) stopBreaking(body);
-			body.face(centre);
-			// Stand next to it, not in it: aim for within reach of the block.
-			Navigator.State s = nav.toward(centre, 3.2);
-			if (s == Navigator.State.UNREACHABLE || s == Navigator.State.STUCK || ++approachTicks > 20 * 30) {
-				skip(body, s == Navigator.State.STUCK ? "got stuck on the way" : approachTicks > 20 * 30 ? "took too long to reach" : "no path within reach");
+			if (!digger.breaking()) body.face(Vec3.atCenterOf(current));
+			Navigator.State s = nav.toward(Vec3.atCenterOf(current), reach);
+			// Arrived, but a block is in the way: break it rather than walk around, as a player would.
+			// Only once arrived, so a planned staircase isn't cut short by a diagonal hole.
+			if (s == Navigator.State.ARRIVED && dig && body.inReach(current) && clearLineOfSight(body)) return;
+			// Digging by hand can take minutes; walking shouldn't take more than half of one.
+			int limit = nav.digging() ? 20 * 60 * 10 : 20 * 30;
+			if (s == Navigator.State.UNREACHABLE || s == Navigator.State.STUCK || ++approachTicks > limit) {
+				skip(body, s == Navigator.State.STUCK ? "got stuck on the way" : approachTicks > limit ? "took too long to reach" : dig ? "no way there, even digging" : "no path within reach");
 				return;
 			}
 			if (s == Navigator.State.ARRIVED && body.inReach(current) && body.sight(current) == null) {
@@ -111,53 +131,54 @@ public final class MineIntent extends Intent {
 		approachTicks = 0;
 
 		// Within reach with a clear line of sight: dig.
-		body.face(sight.getLocation());
-		if (!body.facing(sight.getLocation(), 15)) return; // finish turning first, like a player would
-		face = sight.getDirection();
-		if (!breaking) {
-			body.holdToolFor(state);
-			body.breakAction(current, face, ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK);
-			breaking = true;
-			progress = 0;
-			if (body.level().getBlockState(current).isAir()) { // creative mode breaks instantly
-				finishedBlock(body);
-				return;
+		switch (digger.tick(current, sight)) {
+			case BROKEN -> {
+				mined++;
+				current = null;
+				collectTicks = COLLECT_TICKS;
 			}
-		}
-		progress += state.getDestroyProgress(body.agent, body.level(), current);
-		if (ticks() % 4 == 0) body.swingArm();
-		if (progress >= 1f) {
-			body.breakAction(current, face, ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK);
-			breaking = false;
-			if (body.level().getBlockState(current).isAir()) {
-				finishedBlock(body);
-			} else {
-				// The server's own progress estimate disagreed (e.g. the tool changed). Keep holding.
-				progress = 0.9f;
-				breaking = true;
+			case FAILED -> skip(body, BlockCodec.id(state) + " can't be broken");
+			case BUSY -> {
 			}
 		}
 	}
 
-	private void finishedBlock(Body body) {
-		mined++;
-		current = null;
-		breaking = false;
-		delay = BREAK_DELAY;
-		collectTicks = COLLECT_TICKS;
-	}
-
-	private void stopBreaking(Body body) {
-		if (!breaking || current == null) return;
-		body.breakAction(current, face, ServerboundPlayerActionPacket.Action.ABORT_DESTROY_BLOCK);
-		breaking = false;
-		progress = 0;
+	/**
+	 * With the target in reach but a block in the way, breaks that block, as a player would. Never the
+	 * block under our own feet, and only where digging is safe. Returns false if there's nothing it can
+	 * break, and then the approach comes closer instead.
+	 */
+	private boolean clearLineOfSight(Body body) {
+		var level = body.level();
+		BlockPos b = blocking != null && !level.getBlockState(blocking).isAir() ? blocking : Digger.blocker(body, current);
+		if (b == null || b.equals(body.agent.blockPosition().below()) || !body.inReach(b) || !digger.breaking() && !PathFinder.safeToDig(level, b)) {
+			blocking = null;
+			if (reach > DIG_REACH) {
+				reach = DIG_REACH; // stand right next to it instead
+				nav.reset();
+			}
+			return false;
+		}
+		blocking = b;
+		switch (digger.tick(b, Digger.hitOn(body, b))) {
+			case BROKEN -> {
+				cleared++;
+				blocking = null;
+			}
+			case FAILED -> {
+				blocking = null;
+				return false;
+			}
+			case BUSY -> {
+			}
+		}
+		return true;
 	}
 
 	private void skip(Body body, String why) {
 		skipped++;
 		if (skippedWhy.size() < 3) skippedWhy.add(current.getX() + " " + current.getY() + " " + current.getZ() + ": " + why);
-		stopBreaking(body);
+		digger.abort();
 		current = null;
 		nav.reset();
 		approachTicks = 0;
@@ -178,10 +199,24 @@ public final class MineIntent extends Intent {
 			}
 			current = p;
 			expected = s;
+			blocking = null;
+			reach = REACH;
 			nav.reset();
 			return true;
 		}
 		return false;
+	}
+
+	/**
+	 * Plans the way to the first block now, so the tool can say whether reaching it means digging and
+	 * how long that takes. Empty when it's a plain walk. The intent keeps the path.
+	 */
+	public String planNow(Body body) {
+		if (current == null && !pickNext(body)) return "";
+		if (body.inReach(current) && body.sight(current) != null) return "";
+		Navigator.State s = nav.toward(Vec3.atCenterOf(current), reach);
+		if (s == Navigator.State.UNREACHABLE) return dig ? "no way to it found, even digging" : "no walking path to it; dig=true would dig there";
+		return nav.digging() ? "getting there means " + nav.summary() : "";
 	}
 
 	/** Walks onto nearby drops so they get picked up. Returns false when there is nothing to collect. */
@@ -198,14 +233,18 @@ public final class MineIntent extends Intent {
 		}
 		if (nearest == null) return false;
 		body.face(nearest.position());
+		// A drop down in a hole (where a mined block was) often lies at its edge. Aim for the middle of
+		// the hole, or the body stays propped on the rim, too high to pick it up.
+		Vec3 to = Math.abs(nearest.getY() - body.agent.getY()) > 0.5 ? Vec3.atBottomCenterOf(nearest.blockPosition()) : nearest.position();
 		// Stand on it once close: a fresh drop can't be picked up for half a second, and running past it wastes time.
-		if (best > 0.6) body.moveToward(nearest.position(), 0.6);
+		if (to.subtract(body.agent.position()).horizontalDistanceSqr() > 0.04 || best > 0.6) body.moveToward(to, 0.6);
 		return true;
 	}
 
 	@Override
 	protected void stop(Body body) {
-		stopBreaking(body);
+		digger.abort();
+		nav.stop();
 	}
 
 	/** Counts of items in the inventory, to report what mining gained. */
