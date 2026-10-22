@@ -39,6 +39,8 @@ public class LiveBodyTest implements FabricClientGameTest {
 
 	private ClientGameTestContext ctx;
 	private TestSingleplayerContext world;
+	private Narrator narrator;
+	private int watched;
 
 	@Override
 	public void runTest(ClientGameTestContext ctx) {
@@ -68,6 +70,7 @@ public class LiveBodyTest implements FabricClientGameTest {
 			// The agent, from inside the game, like a player would do it.
 			chatCommand("agent spawn " + AGENT);
 			world.getServer().waitFor(server -> AgentsMc.session().brains.body(AGENT) != null, 200);
+			narrator = new Narrator(world, AGENT);
 			run("gamemode survival " + AGENT);
 			run("give " + AGENT + " iron_axe");
 			run("give " + AGENT + " iron_sword");
@@ -98,6 +101,8 @@ public class LiveBodyTest implements FabricClientGameTest {
 			int logsBefore = logsStanding(x, y, z);
 			waitForBrain(b -> b.status() == AgentBrain.Status.IDLE && logsStanding(x, y, z) <= 2, 20 * 240);
 			LOG.info("logs standing: {} before, {} after", logsBefore, logsStanding(x, y, z));
+			Vec3 back = agentPos();
+			run(String.format(Locale.ROOT, "tp Player0 %.1f %.1f %.1f", back.x - 6, back.y, back.z - 3));
 			watch(40);
 			ctx.takeScreenshot("live-03-chopped");
 
@@ -111,7 +116,10 @@ public class LiveBodyTest implements FabricClientGameTest {
 			watch(40);
 			ctx.takeScreenshot("live-04-fought");
 
-			// 4. Ask what happened.
+			// 4. Ask what happened, from a few blocks back.
+			Vec3 ap = agentPos();
+			run(String.format(Locale.ROOT, "tp Player0 %.1f %.1f %.1f", ap.x - 5, ap.y, ap.z - 4));
+			watch(20);
 			int says2 = world.getServer().computeOnServer(server -> count(AgentsMc.session().brains.get(AGENT), ActivityLog.Kind.SAY));
 			chat("@" + AGENT + " what just happened? and how are you doing?");
 			waitForBrain(b -> count(b, ActivityLog.Kind.SAY) > says2, 20 * 120);
@@ -175,6 +183,7 @@ public class LiveBodyTest implements FabricClientGameTest {
 			if (at != null) ctx.runOnClient(mc -> {
 				if (mc.player != null) mc.player.lookAt(EntityAnchorArgument.Anchor.EYES, at);
 			});
+			if (narrator != null && (watched += 2) % 6 == 0) narrator.tick();
 			ctx.waitTicks(2);
 		}
 	}
@@ -187,6 +196,7 @@ public class LiveBodyTest implements FabricClientGameTest {
 					mc.player.setXRot(pitch);
 				}
 			});
+			if (narrator != null && (watched += 2) % 6 == 0) narrator.tick();
 			ctx.waitTicks(2);
 		}
 	}

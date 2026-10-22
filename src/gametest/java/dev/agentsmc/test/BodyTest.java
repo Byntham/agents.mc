@@ -7,8 +7,6 @@ import dev.agentsmc.agent.AgentPlayer;
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest;
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestSingleplayerContext;
-import net.minecraft.client.KeyMapping;
-import net.minecraft.client.Options;
 import net.minecraft.commands.arguments.EntityAnchorArgument;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
@@ -28,14 +26,12 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
-import java.util.function.Function;
-import java.util.function.Predicate;
 
 /**
  * Drives a survival agent body through an obstacle course in a real client: walk over a step and
  * through a gap, chop logs, kill a zombie, follow the host around, and back away from a creeper. The
- * host's camera tracks the agent the whole time, so a screen recording of this test shows it working.
- * Set AGENTSMC_ONLY=body to run just this test.
+ * host's camera tracks the agent the whole time and the chat shows what the agent senses, so a screen
+ * recording of this test shows it working. Set AGENTSMC_ONLY=body to run just this test.
  */
 public class BodyTest implements FabricClientGameTest {
 	private static final Logger LOG = LoggerFactory.getLogger("agentsmc-test");
@@ -45,6 +41,8 @@ public class BodyTest implements FabricClientGameTest {
 	private int port;
 	private ClientGameTestContext ctx;
 	private TestSingleplayerContext world;
+	private Narrator narrator;
+	private int watched;
 
 	@Override
 	public void runTest(ClientGameTestContext ctx) {
@@ -72,6 +70,7 @@ public class BodyTest implements FabricClientGameTest {
 			// ---- setup: a survival agent with tools, in front of the host ----
 			JsonObject spawned = call("spawn_agent", obj("name", AGENT, "x", x + 0.5, "y", (double) y, "z", z + 5.5, "gamemode", "survival"), 30);
 			LOG.info("spawn: {}", text(spawned));
+			narrator = new Narrator(world, AGENT);
 			run("give " + AGENT + " iron_pickaxe");
 			run("give " + AGENT + " iron_axe");
 			run("give " + AGENT + " iron_sword");
@@ -86,6 +85,7 @@ public class BodyTest implements FabricClientGameTest {
 			run(String.format(Locale.ROOT, "fill %d %d %d %d %d %d oak_planks", x - 8, y, z + 15, x + 8, y + 1, z + 15));
 			run(String.format(Locale.ROOT, "fill %d %d %d %d %d %d air", x + 3, y, z + 15, x + 3, y + 1, z + 15));
 			Vec3 goal = new Vec3(x + 0.5, y, z + 21.5);
+			narrator.tool(String.format(Locale.ROOT, "goto x=%.0f y=%.0f z=%.0f", goal.x, goal.y, goal.z));
 			JsonObject go = call("goto", obj("agent", AGENT, "x", goal.x, "y", goal.y, "z", goal.z), 30);
 			LOG.info("goto: {}", text(go));
 			if (!text(go).contains("goto#")) throw new AssertionError("goto didn't start: " + text(go));
@@ -102,6 +102,7 @@ public class BodyTest implements FabricClientGameTest {
 				run(String.format(Locale.ROOT, "setblock %d %d %d oak_log", x - 5, y + i, z + 24));
 			}
 			watch(10);
+			narrator.tool("mine block=oak_log count=6");
 			JsonObject mine = call("mine", obj("agent", AGENT, "block", "oak_log", "count", 6), 30);
 			LOG.info("mine: {}", text(mine));
 			woke = waitFor("mine", 90);
@@ -122,10 +123,11 @@ public class BodyTest implements FabricClientGameTest {
 			// ---- 3. attack: a zombie spawns 10 blocks away; the senses should notice it, then the sword ends it ----
 			vantage(x - 8, y, z + 26, -90, 10);
 			run(String.format(Locale.ROOT, "summon zombie %d %d %d {PersistenceRequired:1b}", x, y, z + 32));
-			watch(30);
-			String events = text(call("get_events", obj("agent", AGENT), 30));
-			LOG.info("events after the zombie appeared:\n{}", events);
+			watch(40);
+			String events = narrator.sensedText();
+			LOG.info("sensed so far:\n{}", events);
 			if (!events.toLowerCase(Locale.ROOT).contains("zombie")) throw new AssertionError("The senses should have reported the zombie: " + events);
+			narrator.tool("attack target=zombie");
 			JsonObject attack = call("attack", obj("agent", AGENT, "target", "zombie"), 30);
 			LOG.info("attack: {}", text(attack));
 			woke = waitFor("attack", 60);
@@ -136,31 +138,34 @@ public class BodyTest implements FabricClientGameTest {
 			ctx.takeScreenshot("body-03-fought");
 
 			// ---- 4. follow: the host walks away and turns; the agent keeps up ----
+			narrator.tool("follow player=Player0 distance=3");
 			JsonObject follow = call("follow", obj("agent", AGENT, "player", "Player0", "distance", 3), 30);
 			LOG.info("follow: {}", text(follow));
 			run(String.format(Locale.ROOT, "tp Player0 %d %d %d 90 0", x - 6, y, z + 4)); // face west
 			ctx.waitTicks(10);
-			ctx.getInput().holdKey(keyUp());
+			ctx.getInput().holdKey(o -> o.keyUp);
 			lookFor(60, 90, 0); // west for 3 s
 			lookFor(60, 180, 0); // north for 3 s
 			lookFor(40, -90, 0); // east for 2 s
-			ctx.getInput().releaseKey(keyUp());
+			ctx.getInput().releaseKey(o -> o.keyUp);
 			watch(80);
 			double gap = agentPos().distanceTo(hostPos());
 			LOG.info("follow: agent is {} blocks from the host", gap);
 			if (gap > 7) throw new AssertionError("Agent should be near the host after following, but is " + gap + " blocks away");
 			ctx.takeScreenshot("body-04-followed");
+			narrator.tool("cancel");
 			LOG.info("cancel: {}", text(call("cancel", obj("agent", AGENT), 30)));
 
 			// ---- 5. creeper: it hisses, the senses hear it, the body backs off ----
-			ctx.waitTicks(20);
+			run(String.format(Locale.ROOT, "tp Player0 %d %d %d", x - 12, y, z + 4));
+			watch(20);
 			Vec3 before = agentPos();
 			Vec3 facing = world.getServer().computeOnServer(server -> agent(server).getLookAngle());
 			Vec3 creeper = before.add(facing.x * 2.5, 0, facing.z * 2.5);
 			run(String.format(Locale.ROOT, "summon creeper %.1f %.1f %.1f {ExplosionRadius:0b,PersistenceRequired:1b}", creeper.x, before.y, creeper.z));
-			watch(60);
-			events = text(call("get_events", obj("agent", AGENT), 30));
-			LOG.info("events after the creeper:\n{}", events);
+			watch(80);
+			events = narrator.sensedText();
+			LOG.info("sensed so far:\n{}", events);
 			Vec3 after = agentPos();
 			LOG.info("creeper: moved {} blocks", after.distanceTo(before));
 			if (!events.toLowerCase(Locale.ROOT).contains("creeper")) throw new AssertionError("The senses should have reported the creeper: " + events);
@@ -177,7 +182,7 @@ public class BodyTest implements FabricClientGameTest {
 
 	/** Waits for the agent's current intent to end (via the wait tool), keeping the camera on the agent. */
 	private String waitFor(String kind, int seconds) {
-		CompletableFuture<JsonObject> pending = callAsync("wait", obj("agent", AGENT, "seconds", seconds, "until", "intent"));
+		CompletableFuture<JsonObject> pending = callAsync("wait", obj("agent", AGENT, "seconds", seconds, "until", "intent", "min_salience", 2));
 		int ticks = 0;
 		while (!pending.isDone() && ticks < (seconds + 10) * 20) {
 			watch(2);
@@ -189,7 +194,7 @@ public class BodyTest implements FabricClientGameTest {
 		return t.lines().findFirst().orElse(t);
 	}
 
-	/** Lets {@code ticks} pass while the host keeps looking at the agent. */
+	/** Lets {@code ticks} pass while the host keeps looking at the agent and the chat narrates. */
 	private void watch(int ticks) {
 		for (int i = 0; i < ticks; i += 2) {
 			Vec3 at = world.getServer().computeOnServer(server -> {
@@ -199,6 +204,7 @@ public class BodyTest implements FabricClientGameTest {
 			if (at != null) ctx.runOnClient(mc -> {
 				if (mc.player != null) mc.player.lookAt(EntityAnchorArgument.Anchor.EYES, at);
 			});
+			if (narrator != null && (watched += 2) % 6 == 0) narrator.tick();
 			ctx.waitTicks(2);
 		}
 	}
@@ -212,12 +218,9 @@ public class BodyTest implements FabricClientGameTest {
 					mc.player.setXRot(pitch);
 				}
 			});
+			if (narrator != null && (watched += 2) % 6 == 0) narrator.tick();
 			ctx.waitTicks(2);
 		}
-	}
-
-	private static Function<Options, KeyMapping> keyUp() {
-		return o -> o.keyUp;
 	}
 
 	// ---- world helpers ---------------------------------------------------------------------------
@@ -293,11 +296,11 @@ public class BodyTest implements FabricClientGameTest {
 		});
 	}
 
-	private static String text(JsonObject result) {
+	static String text(JsonObject result) {
 		return result.getAsJsonArray("content").get(0).getAsJsonObject().get("text").getAsString();
 	}
 
-	private static JsonObject obj(Object... kv) {
+	static JsonObject obj(Object... kv) {
 		JsonObject o = new JsonObject();
 		for (int i = 0; i < kv.length; i += 2) {
 			String k = (String) kv[i];

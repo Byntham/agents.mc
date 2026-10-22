@@ -22,7 +22,7 @@ import java.util.Locale;
  * for as long as the block takes with the tool in hand, then pick up what dropped.
  */
 public final class MineIntent extends Intent {
-	private static final int COLLECT_TICKS = 30;
+	private static final int COLLECT_TICKS = 50;
 	private static final int BREAK_DELAY = 5;
 
 	private final List<BlockPos> targets;
@@ -186,7 +186,7 @@ public final class MineIntent extends Intent {
 
 	/** Walks onto nearby drops so they get picked up. Returns false when there is nothing to collect. */
 	private boolean collectDrops(Body body) {
-		List<ItemEntity> items = body.level().getEntitiesOfClass(ItemEntity.class, body.agent.getBoundingBox().inflate(4, 2, 4), e -> true);
+		List<ItemEntity> items = body.level().getEntitiesOfClass(ItemEntity.class, body.agent.getBoundingBox().inflate(6, 3, 6), e -> true);
 		ItemEntity nearest = null;
 		double best = Double.MAX_VALUE;
 		for (ItemEntity e : items) {
@@ -198,7 +198,8 @@ public final class MineIntent extends Intent {
 		}
 		if (nearest == null) return false;
 		body.face(nearest.position());
-		body.moveToward(nearest.position(), 0.7);
+		// Stand on it once close: a fresh drop can't be picked up for half a second, and running past it wastes time.
+		if (best > 0.6) body.moveToward(nearest.position(), 0.6);
 		return true;
 	}
 

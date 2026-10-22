@@ -5,7 +5,7 @@
 	"name": "Agents MC tests",
 	"environment": "*",
 	"entrypoints": {
-		"fabric-client-gametest": ["dev.agentsmc.test.BodyTest", "dev.agentsmc.test.LiveBodyTest", "dev.agentsmc.test.ScreenshotTest", "dev.agentsmc.test.AgentsMenuTest"]
+		"fabric-client-gametest": ["dev.agentsmc.test.BodyTest", "dev.agentsmc.test.LiveBodyTest", "dev.agentsmc.test.TerrainTest", "dev.agentsmc.test.ScreenshotTest", "dev.agentsmc.test.AgentsMenuTest"]
 	},
 	"depends": {
 		"agentsmc": "*"
