@@ -12,6 +12,7 @@ import dev.agentsmc.agent.AgentManager;
 import dev.agentsmc.agent.AgentPlayer;
 import dev.agentsmc.mcp.ToolException;
 import dev.agentsmc.mixin.CommandSourceStackAccessor;
+import dev.agentsmc.perception.Views;
 import dev.agentsmc.tools.Targets;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSource;
@@ -243,7 +244,9 @@ public final class Brains {
 				brain.log.add(ActivityLog.Kind.ERROR, null, "Couldn't bring the body back: " + e.getMessage());
 			}
 		}
-		brain.send(from, via, text);
+		// The agent reads the message seconds later, by when the sender may have looked away from "here".
+		String context = near == null || AgentManager.isAgent(near) ? null : Views.player(near, body(brain.name));
+		brain.send(from, via, text, context);
 	}
 
 	/** Chat from a player: every agent it @mentions gets the message. */
