@@ -29,16 +29,11 @@ public final class GotoIntent extends Intent {
 		return String.format(Locale.ROOT, "walking to %.0f %.0f %.0f", target.x, target.y, target.z);
 	}
 
+	private Vec3 current;
+
 	@Override
 	public String progress() {
-		double left = target.distanceTo(nav == null ? from : fromBody());
-		return String.format(Locale.ROOT, "%.0f blocks to go", left);
-	}
-
-	private Vec3 current = null;
-
-	private Vec3 fromBody() {
-		return current == null ? from : current;
+		return String.format(Locale.ROOT, "%.0f blocks to go", target.distanceTo(current == null ? from : current));
 	}
 
 	@Override

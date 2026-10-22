@@ -186,7 +186,7 @@ public final class MineIntent extends Intent {
 
 	/** Walks onto nearby drops so they get picked up. Returns false when there is nothing to collect. */
 	private boolean collectDrops(Body body) {
-		List<ItemEntity> items = body.level().getEntitiesOfClass(ItemEntity.class, body.agent.getBoundingBox().inflate(4, 2, 4), e -> !e.hasPickUpDelay() || true);
+		List<ItemEntity> items = body.level().getEntitiesOfClass(ItemEntity.class, body.agent.getBoundingBox().inflate(4, 2, 4), e -> true);
 		ItemEntity nearest = null;
 		double best = Double.MAX_VALUE;
 		for (ItemEntity e : items) {

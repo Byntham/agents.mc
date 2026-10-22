@@ -216,7 +216,7 @@ public final class BodyTools {
 					String reason = woke == null ? String.format(Locale.ROOT, "Nothing notable in %.0fs.", waited)
 							: String.format(Locale.ROOT, "Waited %.1fs. Woke for: %s", waited, woke.text());
 					EventLog.Event finalWoke = woke;
-					return OnServer.call(s.server, () -> reason + "\n" + delta(s, agent, finalWoke == null ? 0 : 1));
+					return OnServer.call(s.server, () -> reason + "\n" + delta(s, agent, finalWoke == null ? 0 : finalWoke.seq()));
 				});
 
 		s.tools.register("set_reflexes",
@@ -364,13 +364,13 @@ public final class BodyTools {
 	}
 
 	/** Status line plus unread events, draining the agent's cursor. Server thread. */
-	static String delta(Session s, String agent, int skipFirst) {
+	static String delta(Session s, String agent, long skipSeq) {
 		AgentPlayer a = s.agents.get(agent);
 		AgentState st = s.agents.state(agent);
 		EventLog.Page page = s.events.since(st.eventCursor, agent, 15, !managed(s, agent));
 		st.eventCursor = page.cursor();
 		StringBuilder sb = new StringBuilder(a.body().senses.statusLine()).append('\n');
-		sb.append(Views.events(page, s.server.getTickCount(), skipFirst));
+		sb.append(Views.events(page, s.server.getTickCount(), skipSeq));
 		return sb.toString();
 	}
 

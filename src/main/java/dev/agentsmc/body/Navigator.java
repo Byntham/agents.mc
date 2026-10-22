@@ -125,9 +125,7 @@ public final class Navigator {
 		boolean sprint = remaining() > 6 && !inWater && node.how() == MoveType.WALK;
 		body.sprint(sprint || node.how() == MoveType.JUMP_GAP);
 		body.moveToward(target, 1.0);
-		if (openDoors(node)) {
-			// Give the door a tick to open before walking into it.
-		}
+		openDoors(node);
 
 		// Jumping.
 		if (inWater) {

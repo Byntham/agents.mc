@@ -391,18 +391,15 @@ public final class Views {
 	 * Unread events as lines with how long ago they happened. Events the agent's own senses produced
 	 * are already in the second person; others get their type as a prefix.
 	 *
-	 * @param skipFirst how many leading events were already shown (e.g. the one a wait woke for)
+	 * @param skipSeq an event already shown (the one a wait woke for), or 0
 	 */
-	public static String events(EventLog.Page page, int nowTick, int skipFirst) {
+	public static String events(EventLog.Page page, int nowTick, long skipSeq) {
 		StringBuilder sb = new StringBuilder();
 		if (page.lost()) sb.append("(Some older events were dropped before you read them.)\n");
 		List<EventLog.Event> list = page.events();
 		if (list.isEmpty()) return sb.append("No new events.\n").toString();
-		if (skipFirst > 0) {
-			if (list.size() <= skipFirst) return sb.toString();
-			list = list.subList(skipFirst, list.size());
-		}
 		for (EventLog.Event e : list) {
+			if (e.seq() == skipSeq) continue;
 			double ago = Math.max(0, nowTick - e.tick()) / 20.0;
 			String when = ago < 1 ? "now" : ago < 60 ? String.format(Locale.ROOT, "%.0fs ago", ago) : String.format(Locale.ROOT, "%.0fm ago", ago / 60);
 			sb.append('[').append(when).append("] ");

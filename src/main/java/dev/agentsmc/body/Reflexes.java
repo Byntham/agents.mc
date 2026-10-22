@@ -100,8 +100,8 @@ public final class Reflexes {
 		ItemStack stack = agent.getMainHandItem();
 		var result = agent.gameMode.useItem(agent, body.level(), stack, InteractionHand.MAIN_HAND);
 		if (agent.isUsingItem()) {
-			eatingSlot = slot < 9 ? prev : agent.getInventory().getSelectedSlot(); // where the tool went
-			if (slot >= 9) eatingSlot = agent.getInventory().getSelectedSlot(); // swapped into the selected slot; swap back later
+			// Afterwards: go back to the previous hotbar slot, or swap the tool back out of the main inventory.
+			eatingSlot = slot < 9 ? prev : slot;
 			body.event("reflex", String.format(Locale.ROOT, "Eating %s (food %d/20).", Views.stack(stack.copyWithCount(1)), food), EventLog.QUIET);
 		} else if (!result.consumesAction()) {
 			body.hold(prev);
