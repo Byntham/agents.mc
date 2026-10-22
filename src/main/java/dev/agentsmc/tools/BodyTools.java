@@ -136,7 +136,7 @@ public final class BodyTools {
 						// tunnelling to the nearest block as the crow flies. Buried targets still come next.
 						List<BlockPos> found = Views.findBlockPositions(a.level(), a.blockPosition(), radius, what, Math.min(256, count * 8));
 						BlockPos feet = a.blockPosition();
-						found.sort(java.util.Comparator.comparingInt((BlockPos p) -> exposed(a.level(), p) ? 0 : 1).thenComparingDouble(p -> p.distSqr(feet)));
+						found.sort(java.util.Comparator.comparingInt((BlockPos p) -> rank(a.level(), p)).thenComparingDouble(p -> p.distSqr(feet)));
 						targets = found.size() > count ? new ArrayList<>(found.subList(0, count)) : found;
 						if (targets.isEmpty()) throw new ToolException("No " + what + " within " + radius + " blocks. Try find_blocks with a bigger radius, or walk somewhere else.");
 						what = BlockCodec.shortId(what.startsWith("#") ? what : what);
@@ -407,13 +407,19 @@ public final class BodyTools {
 
 	// ---- helpers --------------------------------------------------------------------------------
 
-	/** Whether a block has a side open to air or water, so it can be reached without digging. */
-	private static boolean exposed(ServerLevel level, BlockPos p) {
+	/**
+	 * Which targets to mine first: 0 for blocks with a side open to air (no digging to reach them),
+	 * 1 for buried blocks, 2 for blocks touching water. A player leaves ore on a lake bed for last:
+	 * swimming there is slow, breaking under water is five times slower, and it drowns.
+	 */
+	private static int rank(ServerLevel level, BlockPos p) {
+		boolean open = false;
 		for (Direction d : Direction.values()) {
 			BlockPos n = p.relative(d);
-			if (level.getBlockState(n).getCollisionShape(level, n).isEmpty()) return true;
+			if (!level.getFluidState(n).isEmpty()) return 2;
+			if (level.getBlockState(n).getCollisionShape(level, n).isEmpty()) open = true;
 		}
-		return false;
+		return open ? 0 : 1;
 	}
 
 	private static boolean matches(ItemStack stack, String query) {

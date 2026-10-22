@@ -360,7 +360,8 @@ public final class PathFinder {
 				BlockPos at = side.below(fall);
 				Cell c = cell(at);
 				if (c == Cell.WATER) {
-					relax(cur, at, 1.0 + fall * 0.5, MoveType.DROP);
+					// A soft landing, but now the body is in the water and has to get out again.
+					relax(cur, at, 1.0 + fall * 0.5 + 4.0, MoveType.DROP);
 					return;
 				}
 				if (c != Cell.AIR && c != Cell.LADDER) return; // hit something we cannot pass
@@ -473,8 +474,14 @@ public final class PathFinder {
 			return dot < -0.3 ? 6.0 : dot > 0.3 ? 0.8 : 1.5;
 		}
 
+		/**
+		 * Water is dear enough that the body walks round a pond unless the detour is long. A player
+		 * wades through ankle-deep water, swims across only when there is no shore to follow, and dives
+		 * only for a few blocks: under water it drowns, can't sprint and can't fight.
+		 */
 		private double swimCost(BlockPos feet) {
-			return cell(feet.above()) == Cell.WATER ? 3.0 : 2.0; // submerged is slower
+			if (cell(feet.above()) == Cell.WATER) return 12.0; // submerged
+			return standable(feet.below()) ? 3.0 : 5.0; // wading on the bottom vs swimming at the surface
 		}
 
 		// ---- terrain queries -----------------------------------------------------------------
