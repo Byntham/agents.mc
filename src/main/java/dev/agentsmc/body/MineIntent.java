@@ -157,12 +157,6 @@ public final class MineIntent extends Intent {
 		}
 		approachTicks = 0;
 
-		// Submerged and short of air: let the breathe reflex take the body up first. Breaking underwater is
-		// five times slower anyway, so it's no loss.
-		if (body.agent.isUnderWater() && body.agent.getAirSupply() < 200) {
-			body.jump();
-			return;
-		}
 		// Within reach with a clear line of sight: dig.
 		switch (digger.tick(current, sight)) {
 			case BROKEN -> {

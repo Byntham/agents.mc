@@ -56,7 +56,7 @@ public final class Senses {
 	private float pendingDamage;
 	private String pendingDamageFrom;
 	private int damageTick = -1000;
-	private int lavaTick = -1000, airTick = -1000, healTick = -100000;
+	private int lavaTick = -1000, healTick = -100000;
 
 	/** One entity we're keeping an eye on. */
 	private static final class Track {
@@ -281,10 +281,6 @@ public final class Senses {
 		if (agent.isInLava() && t - lavaTick > 40) {
 			lavaTick = t;
 			body.event("hazard", "You are in lava!", EventLog.URGENT);
-		}
-		if (agent.isUnderWater() && agent.getAirSupply() < 100 && t - airTick > 60) {
-			airTick = t;
-			body.event("hazard", String.format(Locale.ROOT, "You're running out of air underwater (%ds left).", agent.getAirSupply() / 20), EventLog.URGENT);
 		}
 	}
 

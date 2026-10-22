@@ -61,7 +61,6 @@ public final class Navigator {
 	/** Arrival tolerance while following a path that digs; see {@link #digReach}. */
 	private double digReach = Double.MAX_VALUE;
 	/** Set when the last plan needed a drop deeper than the usual limit. */
-	private boolean deepDrop;
 	/** Set when the current path breaks blocks. */
 	private boolean digPath;
 	private Path path;
@@ -116,10 +115,6 @@ public final class Navigator {
 		return path == null ? "no path yet" : PathFinder.describe(path);
 	}
 
-	/** A remark for tool output, e.g. that the route includes a long drop. Empty if nothing to say. */
-	public String note() {
-		return deepDrop ? " (includes a drop of more than 3 blocks)" : "";
-	}
 
 	/** Whether the current path breaks blocks. */
 	public boolean digging() {
@@ -227,7 +222,7 @@ public final class Navigator {
 			boolean deep = !agent.onGround();
 			if (dy < -0.5 && !agent.onGround()) {
 				// The next node is below: let the body sink, and look down at it so a sprint-swim
-				// goes that way too. The breathe reflex still pulls up when air runs short.
+				// goes that way too.
 				body.face(target);
 			} else if (agent.isUnderWater() || deep && dy > -0.5 || dy > 0.3) {
 				body.jump();
@@ -265,7 +260,9 @@ public final class Navigator {
 	private boolean arrived(Vec3 goal, double tol) {
 		var agent = body.agent;
 		if (agent.position().distanceTo(goal) > tol) return false;
-		if (!digPath || agent.getY() > goal.y - 0.6) return true;
+		if (!digPath) return true;
+		// Land first: half a block below the goal in mid-jump onto the last step isn't there yet.
+		if (agent.getY() > goal.y - 0.6) return agent.onGround() || agent.isInWater() || agent.getY() >= goal.y - 0.05;
 		BlockPos g = BlockPos.containing(goal);
 		return !agent.level().getBlockState(g).getCollisionShape(agent.level(), g).isEmpty(); // mining: next to the block is enough
 	}
@@ -314,16 +311,6 @@ public final class Navigator {
 			// In water the feet block is the water block itself; on land it's the air block above the floor.
 			p = PathFinder.find(level, start, to, Math.max(tolerance, 0.5), settings);
 			planned++;
-			// A hole or a cliff: players drop further than three blocks when they have to. A six-block
-			// fall costs a heart and a half, which beats not getting there.
-			if (!p.reachesGoal() && goal.y < agent.getY() - 3) {
-				Settings deeper = new Settings(6, settings.canSwim(), settings.canClimb(), settings.canJumpGaps(), settings.canOpenDoors(), settings.maxNodes(), settings.allowDangerous());
-				Path q = PathFinder.find(level, start, to, Math.max(tolerance, 0.5), deeper);
-				if (q.reachesGoal()) {
-					p = q;
-					deepDrop = true;
-				}
-			}
 		}
 		digPath = false;
 		if (dig != Dig.NEVER && (p == null || !p.reachesGoal())) {
@@ -365,7 +352,7 @@ public final class Navigator {
 	 */
 	public String summary() {
 		if (path == null) return "no path yet";
-		if (!digPath) return describe() + note();
+		if (!digPath) return describe();
 		var level = body.level();
 		ItemStack pick = new ItemStack(Items.STONE_PICKAXE);
 		List<String> legs = new ArrayList<>();

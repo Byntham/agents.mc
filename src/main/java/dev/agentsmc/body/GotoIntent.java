@@ -91,9 +91,9 @@ public final class GotoIntent extends Intent {
 						? String.format(Locale.ROOT, "reached %s after %.1fs, %.0f blocks away%s", player, ticks() / 20.0, current.distanceTo(target), dug)
 						: String.format(Locale.ROOT, "arrived at %.1f %.1f %.1f after %.1fs%s", current.x, current.y, current.z, ticks() / 20.0, dug));
 			}
-			case UNREACHABLE -> fail(String.format(Locale.ROOT, "no path to %s; stopped at %.1f %.1f %.1f, %.0f blocks short%s",
+			case UNREACHABLE -> fail(String.format(Locale.ROOT, "no path to %s; stopped at %.1f %.1f %.1f, %.0f blocks short",
 					player != null ? player : String.format(Locale.ROOT, "%.0f %.0f %.0f", target.x, target.y, target.z),
-					current.x, current.y, current.z, current.distanceTo(target), nav.note()));
+					current.x, current.y, current.z, current.distanceTo(target)));
 			case STUCK -> fail(String.format(Locale.ROOT, "got stuck at %.1f %.1f %.1f, %.0f blocks from the goal",
 					current.x, current.y, current.z, current.distanceTo(target)));
 			case MOVING -> {
@@ -111,7 +111,7 @@ public final class GotoIntent extends Intent {
 
 	/** The plan, for the tool's first reply. */
 	public String plan() {
-		return nav.digging() ? nav.summary() : nav.describe() + nav.note();
+		return nav.digging() ? nav.summary() : nav.describe();
 	}
 
 	/** Plans now so the tool can report the route; the intent keeps the path. */

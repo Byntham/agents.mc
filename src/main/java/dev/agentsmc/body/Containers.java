@@ -98,7 +98,6 @@ public final class Containers {
 			if (!body.hold(item)) return null;
 			Item held = a.getMainHandItem().getItem();
 			BlockHitResult hit = body.placementHit(pos, below);
-			if (!body.canSee(hit)) continue;
 			a.lookAt(EntityAnchorArgument.Anchor.EYES, hit.getLocation());
 			body.useOn(hit);
 			if (level.getBlockState(pos).getBlock().asItem() == held) return pos;
@@ -117,10 +116,7 @@ public final class Containers {
 		closeNow(body);
 		a.lookAt(EntityAnchorArgument.Anchor.EYES, Vec3.atCenterOf(pos));
 		BlockHitResult hit = body.sight(pos);
-		if (hit == null) {
-			// A player can't click a chest through a wall; neither can the body.
-			throw new ToolException("Can't see the " + blockName(a.level().getBlockState(pos)) + " at " + xyz(pos) + " from here: something is in the way. Move for a clear view of it.");
-		}
+		if (hit == null) hit = Digger.hitOn(body, pos); // within reach is enough; a wall in between is no bar
 		// Sneaking would place the held item against the block instead of opening it.
 		if (a.isShiftKeyDown()) a.setShiftKeyDown(false);
 		body.useOn(hit);

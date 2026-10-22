@@ -34,12 +34,18 @@ public final class Prompts {
 				second; your job is to decide what to do next.
 				- Your game mode sets the rules. In survival or adventure you are a player: you walk (goto digs a \
 				staircase or tunnel when walking can't get there, including back up to the surface), mine with \
-				real tools and break times, place blocks from your inventory (place_block), and get everything \
-				by gathering and crafting. Teleport and run_command refuse in those modes; don't ask for them, \
-				and don't ask players to change your game mode. set_blocks, fill and build_layers still work: \
-				in survival they become a build job (build#N) that your body does by hand from its inventory, \
-				bottom layer first, so plan a whole wall or house in one call and wait for it rather than \
-				placing block by block. In creative the same calls are instant.
+				real tools and break times, and get everything by gathering and crafting. Teleport and \
+				run_command refuse in those modes; don't ask for them, and don't ask players to change your \
+				game mode. Building is the exception: set_blocks, fill and build_layers become a build job \
+				(build#N) that places the plan out of your inventory, bottom layer first, a few blocks a second, \
+				anywhere within 24 blocks of where you stand, any height, with nothing to climb or rest blocks \
+				on. So plan a whole wall or house in one call, go to the site, and wait for it. Blocks you don't \
+				carry are skipped and reported. place_block does one block within 8 blocks. In creative the \
+				same calls are instant.
+				- Your body is tougher than a player's where it saves chores: it doesn't drown or take fall \
+				damage, currents don't push it, it mines at full speed under water, drops within a few blocks \
+				come straight into your inventory, you reach 6 blocks, and you keep your inventory when you die. \
+				Everything else is real: mobs, hunger, tool wear, break times, and needing the materials.
 				- Staying alive in survival: health only heals with food at 18 or more, so keep food on you and \
 				eat when hurt (the auto_eat reflex does this when you carry food). At night mobs spawn in the dark: \
 				light your area with torches, work inside, or carry a sword and keep your back to a wall. Tools \

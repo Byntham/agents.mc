@@ -5,6 +5,10 @@ import dev.agentsmc.agent.AgentPlayer;
 import dev.agentsmc.agent.AgentState;
 import dev.agentsmc.body.AttackIntent;
 import dev.agentsmc.body.Body;
+import dev.agentsmc.body.Digger;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.item.context.BlockPlaceContext;
+import net.minecraft.world.item.BlockItem;
 import dev.agentsmc.body.CollectIntent;
 import dev.agentsmc.body.FollowIntent;
 import dev.agentsmc.body.GotoIntent;
@@ -46,6 +50,8 @@ public final class BodyTools {
 	/** Tools whose result already is the current state, so no delta is appended. */
 	private static final Set<String> NO_DELTA = Set.of("wait", "observe", "get_events", "get_status", "spawn_agent", "despawn_agent", "list_agents");
 	/** Claude Code aborts an MCP call that hasn't answered after 60 s. */
+	/** How far place_block reaches: no block to click, so this is the whole rule. */
+	private static final double PLACE_RANGE = 8.0;
 	private static final int MAX_WAIT_S = 50;
 
 	private BodyTools() {
@@ -308,9 +314,10 @@ public final class BodyTools {
 				}));
 
 		s.tools.register("place_block",
-				"Place one block from the inventory at a position, like a survival player: you must be within reach (about 4.5 blocks) and the spot must "
-						+ "touch an existing block. Use goto first if it's far. For big creative builds use set_blocks or build_layers instead.",
-				Schema.of().agent(true).str("item", "Block item to place, e.g. oak_planks, torch", true).xyz("Target", true),
+				"Place one block from the inventory at a position within 8 blocks of you. It needs no block to rest on and no line of sight, "
+						+ "only the item. Use goto first if it's far. For anything bigger than a few blocks use build_layers, fill or set_blocks.",
+				Schema.of().agent(true).str("item", "Block item to place, e.g. oak_planks, torch", true).xyz("Target", true)
+						.str("block", "Exact block state, e.g. oak_stairs[facing=north]. Default: the state a player placing it from where you stand would get.", false),
 				args -> OnServer.call(s.server, () -> {
 					AgentPlayer a = s.agents.get(args.str("agent"));
 					Body body = a.body();
@@ -318,47 +325,30 @@ public final class BodyTools {
 					BlockPos pos = new BlockPos(args.integer("x"), args.integer("y"), args.integer("z"));
 					BlockState there = level.getBlockState(pos);
 					if (!there.canBeReplaced()) throw new ToolException(pos.toShortString() + " already has " + BlockCodec.id(there));
-					if (!a.getBoundingBox().intersects(new net.minecraft.world.phys.AABB(pos)) || a.isCreative()) {
-						// fine
-					} else {
+					if (a.getBoundingBox().intersects(new net.minecraft.world.phys.AABB(pos)) && !a.isCreative()) {
 						throw new ToolException("You're standing there. Step aside first.");
 					}
-					BlockPos against = null;
-					double best = Double.MAX_VALUE;
-					boolean anySolid = false;
-					for (Direction d : Direction.values()) {
-						BlockPos n = pos.relative(d);
-						if (level.getBlockState(n).getCollisionShape(level, n).isEmpty()) continue;
-						anySolid = true;
-						if (!body.canSee(body.placementHit(pos, n))) continue; // a face behind a wall can't be clicked
-						double dist = Vec3.atCenterOf(n).distanceToSqr(a.getEyePosition()) - (d == Direction.DOWN ? 0.5 : 0);
-						if (dist < best) {
-							best = dist;
-							against = n;
-						}
-					}
-					if (against == null) {
-						throw new ToolException(anySolid ? "Can't see a face to place against at " + pos.toShortString() + " from here: something is in the way. Move for a clear view of it."
-								: "Nothing to place against: no solid block touches " + pos.toShortString());
-					}
-					if (!body.inReach(against)) {
-						throw new ToolException(String.format(Locale.ROOT, "Out of reach: %s is %s. goto a spot within 4 blocks first.", pos.toShortString(), Senses.relative(a, Vec3.atCenterOf(pos))));
+					Vec3 centre = Vec3.atCenterOf(pos);
+					if (a.position().distanceTo(centre) > PLACE_RANGE) {
+						throw new ToolException(String.format(Locale.ROOT, "Too far: %s is %s. goto a spot within %.0f blocks first.", pos.toShortString(), Senses.relative(a, centre), PLACE_RANGE));
 					}
 					String item = args.str("item").trim().toLowerCase(Locale.ROOT);
 					if (!body.hold(stack -> matches(stack, item))) throw new ToolException("No " + item + " in the inventory. " + inventory(a));
-					BlockHitResult hit = body.placementHit(pos, against);
-					a.lookAt(EntityAnchorArgument.Anchor.EYES, hit.getLocation());
-					// Sneak while placing, as a player does against a table, chest or furnace: otherwise the click opens it.
-					a.setShiftKeyDown(true);
-					InteractionResult r;
-					try {
-						r = body.useOn(hit);
-					} finally {
-						a.setShiftKeyDown(false);
+					ItemStack held = a.getMainHandItem();
+					if (!(held.getItem() instanceof BlockItem blockItem)) throw new ToolException(item + " isn't a block.");
+					// The block's state: as given, or the way the game would turn it for a player placing it from here.
+					BlockState state;
+					if (args.has("block")) {
+						state = BlockCodec.parse(args.str("block"));
+						if (state.getBlock() != blockItem.getBlock()) throw new ToolException("block " + args.str("block") + " doesn't match the item " + item + ".");
+					} else {
+						a.lookAt(EntityAnchorArgument.Anchor.EYES, centre);
+						BlockHitResult hit = body.placementHit(pos, pos.below());
+						state = blockItem.getBlock().getStateForPlacement(new BlockPlaceContext(a, InteractionHand.MAIN_HAND, held, hit));
+						if (state == null) state = blockItem.getBlock().defaultBlockState();
 					}
-					BlockState now = level.getBlockState(pos);
-					if (now.isAir() || now == there) throw new ToolException("Couldn't place " + item + " at " + pos.toShortString() + " (" + r + ").");
-					return "Placed " + BlockCodec.id(now) + " at " + AgentsMcXyz(pos) + ".";
+					if (!body.placeFromInventory(pos, state, stack -> matches(stack, item))) throw new ToolException("Couldn't place " + item + " at " + pos.toShortString() + ".");
+					return "Placed " + BlockCodec.id(level.getBlockState(pos)) + " at " + AgentsMcXyz(pos) + ".";
 				}));
 
 		s.tools.register("use_block",
@@ -373,7 +363,7 @@ public final class BodyTools {
 					if (before.isAir()) throw new ToolException("Nothing at " + pos.toShortString());
 					a.lookAt(EntityAnchorArgument.Anchor.EYES, Vec3.atCenterOf(pos));
 					BlockHitResult hit = body.sight(pos);
-					if (hit == null) throw new ToolException("Can't see " + BlockCodec.id(before) + " at " + pos.toShortString() + " from here: something is in the way. Move for a clear view of it.");
+					if (hit == null) hit = Digger.hitOn(body, pos); // within reach is enough; a wall in between is no bar
 					InteractionResult r = body.useOn(hit);
 					BlockState after = a.level().getBlockState(pos);
 					return "Used " + BlockCodec.id(before) + " (" + r + ")" + (after != before ? "; it's now " + BlockCodec.id(after) : "") + ".";
@@ -421,7 +411,7 @@ public final class BodyTools {
 	/**
 	 * Which targets to mine first: 0 for blocks with a side open to air (no digging to reach them),
 	 * 1 for buried blocks, 2 for blocks touching water. A player leaves ore on a lake bed for last:
-	 * swimming there is slow, breaking under water is five times slower, and it drowns.
+	 * swimming there is slower and water pours into the hole it leaves.
 	 */
 	private static int rank(ServerLevel level, BlockPos p) {
 		boolean open = false;

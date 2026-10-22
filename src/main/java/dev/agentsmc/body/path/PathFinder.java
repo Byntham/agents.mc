@@ -361,7 +361,7 @@ public final class PathFinder {
 				Cell c = cell(at);
 				if (c == Cell.WATER) {
 					// A soft landing, but now the body is in the water and has to get out again.
-					relax(cur, at, 1.0 + fall * 0.5 + 4.0, MoveType.DROP);
+					relax(cur, at, 1.0 + fall * 0.5 + 1.0, MoveType.DROP);
 					return;
 				}
 				if (c != Cell.AIR && c != Cell.LADDER) return; // hit something we cannot pass
@@ -458,30 +458,18 @@ public final class PathFinder {
 			relax(cur, to, swimCost(to), MoveType.SWIM);
 		}
 
-		/**
-		 * Flowing water pushes the body. Going with the current is a little cheaper; against it is far
-		 * dearer, so the planner goes round where it can, instead of wading in place.
-		 */
+		/** Flowing water doesn't push the body ({@code AgentPlayer.isPushedByFluid}), so a current costs nothing extra. */
 		private double current(BlockPos from, BlockPos to) {
-			var fluid = level.getFluidState(to);
-			if (fluid.isEmpty() || fluid.isSource()) return 1.0;
-			var flow = fluid.getFlow(level, to);
-			if (flow.lengthSqr() < 1e-4) return 1.0;
-			double dx = to.getX() - from.getX(), dz = to.getZ() - from.getZ();
-			double len = Math.sqrt(dx * dx + dz * dz);
-			if (len < 1e-6) return 1.0;
-			double dot = (flow.x * dx + flow.z * dz) / (len * flow.length());
-			return dot < -0.3 ? 6.0 : dot > 0.3 ? 0.8 : 1.5;
+			return 1.0;
 		}
 
 		/**
-		 * Water is dear enough that the body walks round a pond unless the detour is long. A player
-		 * wades through ankle-deep water, swims across only when there is no shore to follow, and dives
-		 * only for a few blocks: under water it drowns, can't sprint and can't fight.
+		 * Water is slower than land, not dangerous: the body doesn't drown and currents don't push it.
+		 * It still walks round a pond when the way round is short, and swims when it isn't.
 		 */
 		private double swimCost(BlockPos feet) {
-			if (cell(feet.above()) == Cell.WATER) return 12.0; // submerged
-			return standable(feet.below()) ? 3.0 : 5.0; // wading on the bottom vs swimming at the surface
+			if (cell(feet.above()) == Cell.WATER) return 2.5; // submerged
+			return standable(feet.below()) ? 1.5 : 2.0; // wading on the bottom vs swimming at the surface
 		}
 
 		// ---- terrain queries -----------------------------------------------------------------

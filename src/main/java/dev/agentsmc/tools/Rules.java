@@ -15,7 +15,7 @@ public final class Rules {
 	private Rules() {
 	}
 
-	/** Whether the body plays by survival rules: walks, digs, places by hand. */
+	/** Whether the body plays by survival rules: walks, digs, places from its inventory. */
 	public static boolean playsByTheRules(Session s, AgentPlayer a) {
 		if (!s.config.survivalRules) return false;
 		GameType mode = a.gameMode();

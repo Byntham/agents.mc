@@ -84,6 +84,8 @@ public final class Body {
 		}
 
 		senses.tick();
+		// Drops nearby come to the body on their own: no chasing items under leaves or down holes.
+		gatherDrops(agent.getBoundingBox().inflate(2.5));
 		// A reflex that moves the body (fleeing a creeper) owns this tick's movement: an intent
 		// steering toward its goal would otherwise cancel the step away.
 		boolean reflexMoving = reflexes.tick();
@@ -416,43 +418,32 @@ public final class Body {
 		BlockState state = agent.level().getBlockState(target);
 		net.minecraft.world.phys.shapes.VoxelShape shape = state.getCollisionShape(agent.level(), target);
 		// Aim at the block's real shape, not a full cube: a door is three sixteenths thick and a ray at
-		// the cube's face centre would pass in front of it.
-		net.minecraft.world.phys.AABB box = shape.isEmpty() ? new net.minecraft.world.phys.AABB(0, 0, 0, 1, 1, 1) : shape.bounds();
+		// the cube's face centre would pass in front of it. Clamped to the block's own cell: a fence or
+		// gate's shape reaches up into the cell above, where a ray finds nothing to click.
+		net.minecraft.world.phys.AABB cell = new net.minecraft.world.phys.AABB(0, 0, 0, 1, 1, 1);
+		net.minecraft.world.phys.AABB box = shape.isEmpty() ? cell : shape.bounds().intersect(cell);
 		Vec3 centre = Vec3.atLowerCornerOf(target).add(box.getCenter());
 		// Aim at the face that points back toward the eyes, so the hit lands on the block's surface.
 		Direction face = Direction.getApproximateNearest(eye.x - centre.x, eye.y - centre.y, eye.z - centre.z);
 		Vec3 n = Vec3.atLowerCornerOf(face.getUnitVec3i());
-		Vec3 aim = centre.add(n.x * box.getXsize() / 2, n.y * box.getYsize() / 2, n.z * box.getZsize() / 2);
-		Vec3 to = eye.add(aim.subtract(eye).normalize().scale(agent.blockInteractionRange() + 1.5));
+		Vec3 faceAim = centre.add(n.x * box.getXsize() / 2, n.y * box.getYsize() / 2, n.z * box.getZsize() / 2);
 		// Only solid blocks block the view: short grass in the agent's own block must not stop it mining the block it stands on.
-		BlockHitResult hit = agent.level().clip(new ClipContext(eye, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, agent));
-		if (hit.getType() == HitResult.Type.BLOCK && hit.getBlockPos().equals(target)) return hit;
+		// Two tries: the face centre, then the middle of the shape for the odd angle where the face is grazed.
+		BlockHitResult hit = null;
+		for (Vec3 aim : new Vec3[]{faceAim, centre}) {
+			Vec3 to = eye.add(aim.subtract(eye).normalize().scale(agent.blockInteractionRange() + 1.5));
+			hit = agent.level().clip(new ClipContext(eye, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, agent));
+			if (hit.getType() == HitResult.Type.BLOCK && hit.getBlockPos().equals(target)) return hit;
+		}
 		// The target itself has no collision shape (grass, flowers, torches): it's in view if nothing solid is in front of it.
 		if (shape.isEmpty()) {
-			double toTarget = eye.distanceTo(aim);
-			if (hit.getType() != HitResult.Type.BLOCK || eye.distanceTo(hit.getLocation()) > toTarget - 0.2) return new BlockHitResult(aim, face, target, false);
+			double toTarget = eye.distanceTo(faceAim);
+			if (hit.getType() != HitResult.Type.BLOCK || eye.distanceTo(hit.getLocation()) > toTarget - 0.2) return new BlockHitResult(faceAim, face, target, false);
 		}
 		return null;
 	}
 
-	/**
-	 * Whether the eyes have a clear line to the point a hit result clicks: nothing solid between them
-	 * other than the hit's own block. Placing against a face through a wall is not something a
-	 * player can do.
-	 */
-	public boolean canSee(BlockHitResult hit) {
-		return canSee(agent.getEyePosition(), hit);
-	}
 
-	/** {@link #canSee(BlockHitResult)} from somewhere else, to judge a spot before walking there. */
-	public boolean canSee(Vec3 eye, BlockHitResult hit) {
-		Vec3 loc = hit.getLocation();
-		Vec3 dir = loc.subtract(eye);
-		if (dir.lengthSqr() < 1e-6) return true;
-		Vec3 to = loc.add(dir.normalize().scale(0.05)); // just past the face, into the block it belongs to
-		BlockHitResult r = agent.level().clip(new ClipContext(eye, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, agent));
-		return r.getType() != HitResult.Type.BLOCK || r.getBlockPos().equals(hit.getBlockPos());
-	}
 
 	/** A hit result on the face of {@code against} that points at {@code free}, for placing a block there. */
 	public BlockHitResult placementHit(BlockPos free, BlockPos against) {
@@ -502,27 +493,81 @@ public final class Body {
 		if (lastTorch != null && lastTorch.distSqr(feet) < 36) return;
 		if (agent.level().getMaxLocalRawBrightness(feet) >= 8) return;
 		if (!agent.getInventory().contains(s -> s.is(net.minecraft.world.item.Items.TORCH))) return;
-		int held = agent.getInventory().getSelectedSlot();
 		for (Direction d : Direction.Plane.HORIZONTAL) {
 			BlockPos pos = feet.relative(d);
 			BlockState at = agent.level().getBlockState(pos);
 			if (!at.isAir() || !agent.level().getBlockState(pos.below()).isFaceSturdy(agent.level(), pos.below(), Direction.UP)) continue;
-			if (!hold(s -> s.is(net.minecraft.world.item.Items.TORCH))) return;
-			BlockHitResult hit = placementHit(pos, pos.below());
-			if (!canSee(hit)) continue;
-			agent.setShiftKeyDown(true);
-			try {
-				useOn(hit);
-			} finally {
-				agent.setShiftKeyDown(false);
-			}
-			if (agent.level().getBlockState(pos).is(net.minecraft.world.level.block.Blocks.TORCH)) {
+			if (placeFromInventory(pos, net.minecraft.world.level.block.Blocks.TORCH.defaultBlockState(), s -> s.is(net.minecraft.world.item.Items.TORCH))) {
 				lastTorch = pos;
-				hold(held);
 				return;
 			}
 		}
-		hold(held);
+	}
+
+	// ---- placing and picking up -----------------------------------------------------------------
+
+	/**
+	 * Puts {@code state} at {@code pos} out of the inventory, using up one item that {@code item}
+	 * accepts. A player needs a block to click and a clear view of it; the body only needs the item,
+	 * which is the part that matters: what it builds, it gathered. Plays the place sound and swings.
+	 */
+	public boolean placeFromInventory(BlockPos pos, BlockState state, Predicate<ItemStack> item) {
+		if (!mayInteract(pos)) return false;
+		var inv = agent.getInventory();
+		int slot = -1;
+		for (int i = 0; i < inv.getContainerSize() && slot < 0; i++) {
+			ItemStack st = inv.getItem(i);
+			if (!st.isEmpty() && item.test(st)) slot = i;
+		}
+		if (slot < 0) return false;
+		var level = agent.level();
+		if (!level.setBlock(pos, state, net.minecraft.world.level.block.Block.UPDATE_ALL)) return false;
+		if (!agent.isCreative()) inv.getItem(slot).shrink(1);
+		var sound = state.getSoundType();
+		level.playSound(null, pos, sound.getPlaceSound(), net.minecraft.sounds.SoundSource.BLOCKS, (sound.getVolume() + 1) / 2, sound.getPitch() * 0.8f);
+		face(Vec3.atCenterOf(pos));
+		swingArm();
+		return true;
+	}
+
+	/**
+	 * Takes every item drop inside {@code box} into the inventory, pickup delay or not. Drops near the
+	 * body, and the drops of a block it just broke, come to it instead of being chased.
+	 */
+	public void gatherDrops(net.minecraft.world.phys.AABB box) {
+		if (agent.isSpectator() || !agent.isAlive()) return;
+		for (net.minecraft.world.entity.item.ItemEntity e : agent.level().getEntitiesOfClass(net.minecraft.world.entity.item.ItemEntity.class, box, net.minecraft.world.entity.item.ItemEntity::isAlive)) {
+			ItemStack st = e.getItem();
+			if (st.isEmpty() || e.getAge() >= 5990) continue; // /give's animation-only item is born one tick from despawning; never a real drop
+			int before = st.getCount();
+			agent.getInventory().add(st); // takes what fits, leaving the rest in the stack
+			int took = before - st.getCount();
+			if (took > 0) agent.take(e, took); // the pick-up animation for anyone watching
+			if (st.isEmpty()) e.discard();
+			else e.setItem(st);
+		}
+	}
+
+	/**
+	 * Breaks the block at {@code pos} at once, as if mined with the best tool carried, with its drops
+	 * going into the inventory (what doesn't fit drops where the block was). The tool wears as it
+	 * would. For build jobs, which take blocks out at a distance.
+	 */
+	public void removeToInventory(BlockPos pos) {
+		var level = agent.level();
+		BlockState state = level.getBlockState(pos);
+		if (state.isAir() || !mayInteract(pos)) return;
+		holdToolFor(state);
+		ItemStack tool = agent.getMainHandItem();
+		List<ItemStack> drops = net.minecraft.world.level.block.Block.getDrops(state, level, pos, level.getBlockEntity(pos), agent, tool);
+		face(Vec3.atCenterOf(pos));
+		swingArm();
+		if (!level.destroyBlock(pos, false, agent, 512)) return;
+		for (ItemStack d : drops) {
+			agent.getInventory().add(d);
+			if (!d.isEmpty()) net.minecraft.world.level.block.Block.popResource(level, pos, d);
+		}
+		if (tool.isDamageableItem() && !agent.isCreative()) tool.hurtAndBreak(1, agent, net.minecraft.world.entity.EquipmentSlot.MAINHAND);
 	}
 
 	// ---- events ---------------------------------------------------------------------------------

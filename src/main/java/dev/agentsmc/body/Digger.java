@@ -16,7 +16,7 @@ import net.minecraft.world.phys.Vec3;
  * best tool, start, add up {@code getDestroyProgress} every tick, stop at 1.0, then wait five ticks
  * before the next block. {@link MineIntent} and {@link Navigator} both break blocks through this.
  */
-final class Digger {
+public final class Digger {
 	enum Result {
 		/** Turning, waiting out the pause between blocks, or holding the button. Call again next tick. */
 		BUSY,
@@ -106,6 +106,8 @@ final class Digger {
 		breaking = false;
 		broken++;
 		readyAt = body.agent.tickCount + BREAK_DELAY;
+		// The drops go straight into the inventory, wherever the block was: no chasing them down a hole.
+		if (target != null) body.gatherDrops(new net.minecraft.world.phys.AABB(target).inflate(1.5));
 		return Result.BROKEN;
 	}
 
@@ -133,7 +135,7 @@ final class Digger {
 	// ---- looking at blocks ----------------------------------------------------------------------
 
 	/** Where to look to break {@code pos}: the visible face if there is one, else the face toward the eyes. */
-	static BlockHitResult hitOn(Body body, BlockPos pos) {
+	public static BlockHitResult hitOn(Body body, BlockPos pos) {
 		BlockHitResult hit = body.sight(pos);
 		if (hit != null) return hit;
 		Vec3 eye = body.agent.getEyePosition(), c = Vec3.atCenterOf(pos);

@@ -68,7 +68,7 @@ public final class BuildTools {
 
 		s.tools.register("fill",
 				"Fill a box between two corners with one block. mode: solid (default), hollow (shell with air inside), "
-						+ "outline (shell only, inside untouched). Optional 'replace' limits the fill to blocks of that type (e.g. \"air\" to only fill empty space). A survival body does it by hand as a build job.",
+						+ "outline (shell only, inside untouched). Optional 'replace' limits the fill to blocks of that type (e.g. \"air\" to only fill empty space). A survival body does it as a build job from its inventory.",
 				Schema.of().agent(true)
 						.integer("x1", "Corner 1 x", true).integer("y1", "Corner 1 y", true).integer("z1", "Corner 1 z", true)
 						.integer("x2", "Corner 2 x", true).integer("y2", "Corner 2 y", true).integer("z2", "Corner 2 z", true)
@@ -104,7 +104,7 @@ public final class BuildTools {
 				});
 
 		s.tools.register("build_layers",
-				"Build a structure from layered character grids, the same format get_blocks returns. In creative it appears at once; a survival body builds it by hand as a job (bottom layer first, from its inventory; call wait). "
+				"Build a structure from layered character grids, the same format get_blocks returns. In creative it appears at once; a survival body builds it as a job (bottom layer first, out of its inventory, a few blocks a second; call wait). "
 						+ "origin (x,y,z) is the north-west-bottom corner. layers[0] is the bottom layer at y; each layer is a list of rows; "
 						+ "row 0 is the north edge (z), each next row is one block further south (+z); character 0 of a row is at x, then +x eastward. "
 						+ "palette maps single characters to blocks. A space means 'leave unchanged' and '.' always means air. "
@@ -165,9 +165,9 @@ public final class BuildTools {
 
 	private static String apply(Session s, AgentPlayer agent, String description, Map<BlockPos, BlockCodec.Spec> changes) {
 		if (changes.size() > s.config.maxBuildBlocks) throw new ToolException("That is " + changes.size() + " blocks; the limit is " + s.config.maxBuildBlocks);
-		// A survival body builds by hand: the same plan becomes a job the body carries out block by block.
+		// A survival body builds from its inventory: the same plan becomes a job the body carries out block by block.
 		if (Rules.playsByTheRules(s, agent)) {
-			if (changes.size() > 512) throw new ToolException("That is " + changes.size() + " blocks; by hand, keep a build under 512 and do it in parts.");
+			if (changes.size() > 512) throw new ToolException("That is " + changes.size() + " blocks; as a job, keep a build under 512 and do it in parts.");
 			BuildIntent intent = agent.body().start(new BuildIntent(agent.body(), description, changes));
 			String shortfall = intent.shortfall(agent.body());
 			return intent.tag() + " started: " + intent.plan() + (shortfall.isEmpty() ? "" : "; " + shortfall + " (those will be skipped unless you get them)")

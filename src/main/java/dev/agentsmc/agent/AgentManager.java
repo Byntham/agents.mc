@@ -64,6 +64,8 @@ public final class AgentManager {
 		AgentPlayer agent = new AgentPlayer(server, level, profile, this);
 		if (diedAs != null) {
 			agent.restoreFrom(diedAs, false);
+			// The dead body dropped nothing (AgentPlayer.dropEquipment); its inventory carries over.
+			agent.getInventory().replaceWith(diedAs.getInventory());
 			// restoreFrom doesn't carry /tag tags; vanilla's PlayerList.respawn copies them separately.
 			for (String tag : diedAs.entityTags()) agent.addTag(tag);
 		} else {
@@ -73,6 +75,8 @@ public final class AgentManager {
 						.ifPresent(tag -> agent.load(TagValueInput.create(reporter, server.registryAccess(), tag)));
 			}
 		}
+		// The save carries the attributes it was written with; the body's own values win.
+		agent.applyPerks();
 		// The save may be from a body that just died mid-fall or on fire; start clean.
 		agent.resetFallDistance();
 		agent.clearFire();
