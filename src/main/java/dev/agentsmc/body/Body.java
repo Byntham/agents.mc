@@ -413,21 +413,45 @@ public final class Body {
 	 */
 	public BlockHitResult sight(BlockPos target) {
 		Vec3 eye = agent.getEyePosition();
-		Vec3 centre = Vec3.atCenterOf(target);
+		BlockState state = agent.level().getBlockState(target);
+		net.minecraft.world.phys.shapes.VoxelShape shape = state.getCollisionShape(agent.level(), target);
+		// Aim at the block's real shape, not a full cube: a door is three sixteenths thick and a ray at
+		// the cube's face centre would pass in front of it.
+		net.minecraft.world.phys.AABB box = shape.isEmpty() ? new net.minecraft.world.phys.AABB(0, 0, 0, 1, 1, 1) : shape.bounds();
+		Vec3 centre = Vec3.atLowerCornerOf(target).add(box.getCenter());
 		// Aim at the face that points back toward the eyes, so the hit lands on the block's surface.
 		Direction face = Direction.getApproximateNearest(eye.x - centre.x, eye.y - centre.y, eye.z - centre.z);
-		Vec3 aim = centre.add(Vec3.atLowerCornerOf(face.getUnitVec3i()).scale(0.5));
+		Vec3 n = Vec3.atLowerCornerOf(face.getUnitVec3i());
+		Vec3 aim = centre.add(n.x * box.getXsize() / 2, n.y * box.getYsize() / 2, n.z * box.getZsize() / 2);
 		Vec3 to = eye.add(aim.subtract(eye).normalize().scale(agent.blockInteractionRange() + 1.5));
 		// Only solid blocks block the view: short grass in the agent's own block must not stop it mining the block it stands on.
 		BlockHitResult hit = agent.level().clip(new ClipContext(eye, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, agent));
 		if (hit.getType() == HitResult.Type.BLOCK && hit.getBlockPos().equals(target)) return hit;
 		// The target itself has no collision shape (grass, flowers, torches): it's in view if nothing solid is in front of it.
-		BlockState state = agent.level().getBlockState(target);
-		if (state.getCollisionShape(agent.level(), target).isEmpty()) {
+		if (shape.isEmpty()) {
 			double toTarget = eye.distanceTo(aim);
 			if (hit.getType() != HitResult.Type.BLOCK || eye.distanceTo(hit.getLocation()) > toTarget - 0.2) return new BlockHitResult(aim, face, target, false);
 		}
 		return null;
+	}
+
+	/**
+	 * Whether the eyes have a clear line to the point a hit result clicks: nothing solid between them
+	 * other than the hit's own block. Placing against a face through a wall is not something a
+	 * player can do.
+	 */
+	public boolean canSee(BlockHitResult hit) {
+		return canSee(agent.getEyePosition(), hit);
+	}
+
+	/** {@link #canSee(BlockHitResult)} from somewhere else, to judge a spot before walking there. */
+	public boolean canSee(Vec3 eye, BlockHitResult hit) {
+		Vec3 loc = hit.getLocation();
+		Vec3 dir = loc.subtract(eye);
+		if (dir.lengthSqr() < 1e-6) return true;
+		Vec3 to = loc.add(dir.normalize().scale(0.05)); // just past the face, into the block it belongs to
+		BlockHitResult r = agent.level().clip(new ClipContext(eye, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, agent));
+		return r.getType() != HitResult.Type.BLOCK || r.getBlockPos().equals(hit.getBlockPos());
 	}
 
 	/** A hit result on the face of {@code against} that points at {@code free}, for placing a block there. */
@@ -484,9 +508,11 @@ public final class Body {
 			BlockState at = agent.level().getBlockState(pos);
 			if (!at.isAir() || !agent.level().getBlockState(pos.below()).isFaceSturdy(agent.level(), pos.below(), Direction.UP)) continue;
 			if (!hold(s -> s.is(net.minecraft.world.item.Items.TORCH))) return;
+			BlockHitResult hit = placementHit(pos, pos.below());
+			if (!canSee(hit)) continue;
 			agent.setShiftKeyDown(true);
 			try {
-				useOn(placementHit(pos, pos.below()));
+				useOn(hit);
 			} finally {
 				agent.setShiftKeyDown(false);
 			}

@@ -98,6 +98,7 @@ public final class Containers {
 			if (!body.hold(item)) return null;
 			Item held = a.getMainHandItem().getItem();
 			BlockHitResult hit = body.placementHit(pos, below);
+			if (!body.canSee(hit)) continue;
 			a.lookAt(EntityAnchorArgument.Anchor.EYES, hit.getLocation());
 			body.useOn(hit);
 			if (level.getBlockState(pos).getBlock().asItem() == held) return pos;

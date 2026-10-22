@@ -218,13 +218,18 @@ public final class BodyTools {
 					record Armed(EventLog.Event pending, Waiters.Waiter waiter) {
 					}
 					Armed armed = OnServer.call(s.server, () -> {
+						AgentState st = s.agents.state(agent); // throws for an unknown agent, before anything is registered
 						boolean managed = managed(s, agent);
 						Waiters.Waiter w = s.waiters.register(agent, min, intentsOnly, !managed);
-						AgentState st = s.agents.state(agent);
-						for (EventLog.Event e : s.events.since(st.eventCursor, agent, 100, !managed).events()) {
-							if (e.salience() >= min && (!intentsOnly || e.type().equals("intent"))) return new Armed(e, w);
+						try {
+							for (EventLog.Event e : s.events.since(st.eventCursor, agent, 100, !managed).events()) {
+								if (e.salience() >= min && (!intentsOnly || e.type().equals("intent"))) return new Armed(e, w);
+							}
+							return new Armed(null, w);
+						} catch (RuntimeException e) {
+							s.waiters.unregister(w);
+							throw e;
 						}
-						return new Armed(null, w);
 					});
 					long start = System.currentTimeMillis();
 					EventLog.Event woke = armed.pending();
@@ -320,16 +325,22 @@ public final class BodyTools {
 					}
 					BlockPos against = null;
 					double best = Double.MAX_VALUE;
+					boolean anySolid = false;
 					for (Direction d : Direction.values()) {
 						BlockPos n = pos.relative(d);
 						if (level.getBlockState(n).getCollisionShape(level, n).isEmpty()) continue;
+						anySolid = true;
+						if (!body.canSee(body.placementHit(pos, n))) continue; // a face behind a wall can't be clicked
 						double dist = Vec3.atCenterOf(n).distanceToSqr(a.getEyePosition()) - (d == Direction.DOWN ? 0.5 : 0);
 						if (dist < best) {
 							best = dist;
 							against = n;
 						}
 					}
-					if (against == null) throw new ToolException("Nothing to place against: no solid block touches " + pos.toShortString());
+					if (against == null) {
+						throw new ToolException(anySolid ? "Can't see a face to place against at " + pos.toShortString() + " from here: something is in the way. Move for a clear view of it."
+								: "Nothing to place against: no solid block touches " + pos.toShortString());
+					}
 					if (!body.inReach(against)) {
 						throw new ToolException(String.format(Locale.ROOT, "Out of reach: %s is %s. goto a spot within 4 blocks first.", pos.toShortString(), Senses.relative(a, Vec3.atCenterOf(pos))));
 					}

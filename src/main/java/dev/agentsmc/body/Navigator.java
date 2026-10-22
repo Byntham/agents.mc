@@ -430,17 +430,18 @@ public final class Navigator {
 		for (BlockPos p : new BlockPos[]{node.pos(), node.pos().above()}) {
 			if (body.agent.position().distanceTo(Vec3.atBottomCenterOf(p)) > 2.2) continue;
 			BlockState s = level.getBlockState(p);
-			if (s.getBlock() instanceof DoorBlock door) {
-				if (!door.isOpen(s)) {
-					door.setOpen(body.agent, level, s, p, true);
-					body.swingArm();
-					return true;
-				}
-			} else if (s.getBlock() instanceof FenceGateBlock && !s.getValue(FenceGateBlock.OPEN)) {
-				level.setBlockAndUpdate(p, s.setValue(FenceGateBlock.OPEN, true));
-				body.swingArm();
-				return true;
-			}
+			boolean closed = s.getBlock() instanceof DoorBlock door ? !door.isOpen(s)
+					: s.getBlock() instanceof FenceGateBlock && !s.getValue(FenceGateBlock.OPEN);
+			if (!closed) continue;
+			// Click it the way a player does: that honours spawn protection, iron doors and the block's
+			// own rules, rather than flipping the state directly.
+			BlockHitResult hit = body.sight(p);
+			if (hit == null || !body.inReach(p)) continue;
+			body.useOn(hit);
+			BlockState now = level.getBlockState(p);
+			boolean open = now.getBlock() instanceof DoorBlock door ? door.isOpen(now)
+					: now.getBlock() instanceof FenceGateBlock && now.getValue(FenceGateBlock.OPEN);
+			if (open) return true;
 		}
 		return false;
 	}

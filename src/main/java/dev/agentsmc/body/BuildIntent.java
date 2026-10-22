@@ -40,6 +40,8 @@ public final class BuildIntent extends Intent {
 	private final int total;
 	private Job current;
 	private int placed, broken, approachTicks, stuck, placeFails;
+	/** Where to stand to see a face of the current block, once found; null until needed. */
+	private Vec3 view;
 	private final Map<String, Integer> missing = new LinkedHashMap<>();
 	private final List<String> failed = new ArrayList<>();
 	private int sinceProgress;
@@ -94,11 +96,29 @@ public final class BuildIntent extends Intent {
 		// Something is there that shouldn't be: break it first (also how "air" in a plan is done).
 		boolean needBreak = !have.isAir() && !have.canBeReplaced();
 		Vec3 centre = Vec3.atCenterOf(pos);
-		if (!body.inReach(pos) || needBreak && body.sight(pos) == null) {
+		// A face to click, in view from here. Behind the block just placed in a row there is none, so
+		// the body steps up to the spot, as a player does, rather than placing through the wall.
+		BlockPos against = needBreak || want.isAir() ? null : against(body, pos);
+		boolean hidden = against == null && !needBreak && !want.isAir() && anySolidNeighbour(body, pos);
+		if (!body.inReach(pos) || needBreak && body.sight(pos) == null || hidden) {
 			body.face(centre);
-			Navigator.State s = nav.toward(centre, 3.0);
+			Vec3 goal = centre;
+			double tol = 3.0;
+			if (hidden) {
+				// Pick a spot to stand from which a face is in view, and go there.
+				if (view == null) view = viewpoint(body, pos);
+				if (view == null) {
+					defer(body); // no such spot right now; its neighbours may change later in the plan
+					return;
+				}
+				goal = view;
+				tol = 0.6;
+			}
+			Navigator.State s = nav.toward(goal, tol);
 			if (s == Navigator.State.UNREACHABLE || s == Navigator.State.STUCK || ++approachTicks > APPROACH_TICKS) {
-				skip(body, s == Navigator.State.STUCK ? "got stuck getting there" : "couldn't get within reach");
+				skip(body, s == Navigator.State.STUCK ? "got stuck getting there" : hidden ? "couldn't get a clear view of a face to place it against" : "couldn't get within reach");
+			} else if (hidden && s == Navigator.State.ARRIVED) {
+				defer(body); // stood there and the view is still blocked: come back to it later
 			}
 			return;
 		}
@@ -126,15 +146,9 @@ public final class BuildIntent extends Intent {
 			return;
 		}
 		stuck = 0;
-		BlockPos against = against(body, pos);
 		if (against == null) {
 			// Nothing to place against yet: its neighbours may come later in the plan. Push it to the end once.
-			if (++sinceProgress > 2 * total + 10) {
-				skip(body, "nothing to place it against");
-			} else {
-				jobs.add(current);
-				current = null;
-			}
+			defer(body);
 			return;
 		}
 		Item item = want.getBlock().asItem();
@@ -171,6 +185,7 @@ public final class BuildIntent extends Intent {
 
 	private void finish(Body body, boolean progressed) {
 		current = null;
+		view = null;
 		stuck = 0;
 		placeFails = 0;
 		if (progressed) sinceProgress = 0;
@@ -181,6 +196,7 @@ public final class BuildIntent extends Intent {
 		digger.abort();
 		nav.reset();
 		current = null;
+		view = null;
 		approachTicks = 0;
 		stuck = 0;
 		placeFails = 0;
@@ -210,13 +226,80 @@ public final class BuildIntent extends Intent {
 		return false;
 	}
 
-	/** A solid neighbour to place against, nearest to the eyes; null if the block would float. */
+	/** Puts the current block back at the end of the queue, or gives up on it once the queue has gone round twice. */
+	private void defer(Body body) {
+		if (++sinceProgress > 2 * total + 10) {
+			skip(body, "nothing to place it against");
+		} else {
+			jobs.add(current);
+			current = null;
+			view = null;
+			nav.reset();
+		}
+	}
+
+	/**
+	 * A spot to stand, within two blocks of {@code pos} sideways and a few up or down, from which a
+	 * solid neighbour's face toward {@code pos} is in view and within reach. Nearest first; null if
+	 * there is none.
+	 */
+	private static Vec3 viewpoint(Body body, BlockPos pos) {
+		var level = body.level();
+		Vec3 centre = Vec3.atCenterOf(pos);
+		double eyeHeight = body.agent.getEyeHeight();
+		double reach = body.agent.blockInteractionRange();
+		Vec3 best = null;
+		double bestD = Double.MAX_VALUE;
+		for (int dx = -2; dx <= 2; dx++) {
+			for (int dz = -2; dz <= 2; dz++) {
+				if (dx == 0 && dz == 0) continue;
+				for (int dy = 1; dy >= -3; dy--) {
+					BlockPos feet = pos.offset(dx, dy, dz);
+					BlockPos floor = feet.below();
+					if (level.getBlockState(floor).getCollisionShape(level, floor).isEmpty()) continue;
+					if (!level.getBlockState(feet).getCollisionShape(level, feet).isEmpty() || !level.getBlockState(feet.above()).getCollisionShape(level, feet.above()).isEmpty()) break;
+					Vec3 stand = Vec3.atBottomCenterOf(feet);
+					Vec3 eye = stand.add(0, eyeHeight, 0);
+					if (eye.distanceTo(centre) > reach - 0.5) break;
+					boolean sees = false;
+					for (Direction d : Direction.values()) {
+						BlockPos n = pos.relative(d);
+						if (level.getBlockState(n).getCollisionShape(level, n).isEmpty()) continue;
+						if (body.canSee(eye, body.placementHit(pos, n))) {
+							sees = true;
+							break;
+						}
+					}
+					if (sees) {
+						double dist = stand.distanceToSqr(body.agent.position());
+						if (dist < bestD) {
+							bestD = dist;
+							best = stand;
+						}
+					}
+					break; // the first standable cell in this column is the one
+				}
+			}
+		}
+		return best;
+	}
+
+	private static boolean anySolidNeighbour(Body body, BlockPos pos) {
+		for (Direction d : Direction.values()) {
+			BlockPos n = pos.relative(d);
+			if (!body.level().getBlockState(n).getCollisionShape(body.level(), n).isEmpty()) return true;
+		}
+		return false;
+	}
+
+	/** A solid neighbour with a face toward {@code pos} in view, nearest to the eyes; null if there is none. */
 	private static BlockPos against(Body body, BlockPos pos) {
 		BlockPos best = null;
 		double bestD = Double.MAX_VALUE;
 		for (Direction d : Direction.values()) {
 			BlockPos n = pos.relative(d);
 			if (body.level().getBlockState(n).getCollisionShape(body.level(), n).isEmpty()) continue;
+			if (!body.canSee(body.placementHit(pos, n))) continue; // a face behind a wall can't be clicked
 			double dist = Vec3.atCenterOf(n).distanceToSqr(body.agent.getEyePosition()) - (d == Direction.DOWN ? 0.5 : 0);
 			if (dist < bestD) {
 				bestD = dist;

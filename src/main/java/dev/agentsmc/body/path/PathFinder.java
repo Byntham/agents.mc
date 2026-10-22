@@ -541,7 +541,7 @@ public final class PathFinder {
 			if (state.is(BlockTags.CLIMBABLE)) return Cell.LADDER;
 			if (block instanceof DoorBlock) {
 				if (state.getValueOrElse(DoorBlock.OPEN, false)) return Cell.AIR;
-				return cfg.canOpenDoors() && block != Blocks.IRON_DOOR ? Cell.DOOR : Cell.SOLID;
+				return cfg.canOpenDoors() && ((DoorBlock) block).type().canOpenByHand() ? Cell.DOOR : Cell.SOLID;
 			}
 			if (block instanceof FenceGateBlock) {
 				if (state.getValueOrElse(FenceGateBlock.OPEN, false)) return Cell.AIR;
