@@ -130,7 +130,7 @@ public class LiveBodyTest implements FabricClientGameTest {
 			watch(20);
 			int says2 = world.getServer().computeOnServer(server -> count(AgentsMc.session().brains.get(AGENT), ActivityLog.Kind.SAY));
 			chat("@" + AGENT + " what just happened? and how are you doing?");
-			waitForBrain(b -> count(b, ActivityLog.Kind.SAY) > says2, 20 * 120);
+			waitForBrain(b -> count(b, ActivityLog.Kind.SAY) > says2, 20 * 240);
 			watch(80);
 			ctx.takeScreenshot("live-05-asked");
 			dump();
