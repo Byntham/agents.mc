@@ -130,7 +130,7 @@ public final class AgentManager {
 		// Dying within seconds of spawning means the spawn point itself is lethal; don't loop.
 		boolean respawn = agent.tickCount > 100;
 		// No actor, so the agent itself sees this in its own feed.
-		AgentsMc.events().add("agent_died", null, name + " died" + (respawn ? " and respawned at world spawn" : " right after spawning and was despawned"));
+		AgentsMc.events().sensed(name, "died", null, "You died" + (respawn ? " and respawned at world spawn with a fresh body. Whatever you were doing has stopped." : " right after spawning and were despawned"), dev.agentsmc.perception.EventLog.URGENT);
 		// Respawn as a fresh body at world spawn once the death has been fully processed.
 		server.execute(() -> {
 			if (agents.get(key(name)) != agent) return;
@@ -150,6 +150,11 @@ public final class AgentManager {
 			throw new ToolException("No agent named '" + name + "' is spawned. Call spawn_agent first (or list_agents).");
 		}
 		return agent;
+	}
+
+	/** A spawned agent by name, or null. */
+	public AgentPlayer find(String name) {
+		return name == null ? null : agents.get(key(name));
 	}
 
 	public AgentState state(String name) {

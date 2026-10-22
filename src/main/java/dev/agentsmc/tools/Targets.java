@@ -2,7 +2,11 @@ package dev.agentsmc.tools;
 
 import dev.agentsmc.Session;
 import dev.agentsmc.mcp.ToolException;
+import dev.agentsmc.agent.AgentPlayer;
+import dev.agentsmc.perception.BlockCodec;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.phys.Vec3;
@@ -25,6 +29,36 @@ public final class Targets {
 		List<String> online = new ArrayList<>();
 		for (ServerPlayer o : s.server.getPlayerList().getPlayers()) online.add(o.getName().getString());
 		throw new ToolException("No player named '" + name + "' is online. Online: " + (online.isEmpty() ? "nobody" : String.join(", ", online)));
+	}
+
+	/**
+	 * An entity by player name, numeric entity id, or type (the nearest one of that type within 32
+	 * blocks of the agent, e.g. "zombie"), for tools that act on something.
+	 */
+	public static Entity entity(Session s, AgentPlayer agent, String ref) {
+		String q = ref.trim();
+		if (q.matches("\\d+")) {
+			Entity e = agent.level().getEntity(Integer.parseInt(q));
+			if (e == null) throw new ToolException("No entity with id " + q + " is loaded here");
+			return e;
+		}
+		ServerPlayer p = s.server.getPlayerList().getPlayerByName(q);
+		if (p != null) return p;
+		String type = q.toLowerCase(java.util.Locale.ROOT).replace("minecraft:", "");
+		Entity best = null;
+		double bestDist = Double.MAX_VALUE;
+		for (Entity e : agent.level().getEntities(agent, agent.getBoundingBox().inflate(32), Entity::isAlive)) {
+			String id = BlockCodec.shortId(BuiltInRegistries.ENTITY_TYPE.getKey(e.getType()).toString());
+			boolean match = id.equals(type) || e.hasCustomName() && e.getCustomName().getString().equalsIgnoreCase(q);
+			if (!match) continue;
+			double d = e.distanceToSqr(agent);
+			if (d < bestDist) {
+				bestDist = d;
+				best = e;
+			}
+		}
+		if (best == null) throw new ToolException("No " + q + " within 32 blocks. Pass a player name, an entity type, or an id from get_entities.");
+		return best;
 	}
 
 	/** The named player, or the only human online when no name is given. */

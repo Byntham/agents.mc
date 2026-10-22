@@ -1,6 +1,7 @@
 package dev.agentsmc.agent;
 
 import com.mojang.authlib.GameProfile;
+import dev.agentsmc.body.Body;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ClientInformation;
 import net.minecraft.server.level.ServerLevel;
@@ -13,12 +14,19 @@ import net.minecraft.world.damagesource.DamageSource;
  */
 public final class AgentPlayer extends ServerPlayer {
 	private final AgentManager manager;
+	private final Body body;
 
 	AgentPlayer(MinecraftServer server, ServerLevel level, GameProfile profile, AgentManager manager) {
 		super(server, level, profile, ClientInformation.createDefault());
 		this.manager = manager;
+		this.body = new Body(this);
 		// Show all skin layers (hat, jacket, sleeves...), like a client with default settings would.
 		this.entityData.set(DATA_PLAYER_MODE_CUSTOMISATION, (byte) 0x7f);
+	}
+
+	/** The controller that moves this body and watches the world for it. */
+	public Body body() {
+		return body;
 	}
 
 	@Override
@@ -30,8 +38,17 @@ public final class AgentPlayer extends ServerPlayer {
 		}
 		// A client confirms a dimension change; until then vanilla keeps the player invulnerable.
 		if (isChangingDimension()) hasChangedDimension();
+		// Decide this tick's input before the physics tick reads it.
+		if (isAlive()) body.tick();
 		super.tick();
 		doTick();
+	}
+
+	@Override
+	protected void applyInput() {
+		// A client would have sent movement packets; the body controller supplies the input instead.
+		body.applyInput();
+		super.applyInput();
 	}
 
 	@Override
@@ -39,6 +56,13 @@ public final class AgentPlayer extends ServerPlayer {
 		// Players' movement is normally owned by their client, so the server skips things like fall
 		// damage. An agent has no client: the server is the authority.
 		return false;
+	}
+
+	@Override
+	public boolean hurtServer(ServerLevel level, DamageSource source, float amount) {
+		boolean hurt = super.hurtServer(level, source, amount);
+		if (hurt && amount > 0 && isAlive()) body.senses.onHurt(source, amount);
+		return hurt;
 	}
 
 	@Override

@@ -1,6 +1,7 @@
 package dev.agentsmc.tools;
 
 import com.google.gson.JsonElement;
+import dev.agentsmc.AgentsMc;
 import dev.agentsmc.Session;
 import dev.agentsmc.agent.AgentPlayer;
 import dev.agentsmc.agent.AgentState;
@@ -47,7 +48,7 @@ public final class PerceptionTools {
 				args -> OnServer.call(s.server, () -> {
 					AgentPlayer a = s.agents.get(args.str("agent"));
 					int radius = Math.min(args.integer("radius", 12), 32);
-					return "== Status ==\n" + Views.status(a)
+					return "== Status ==\n" + a.body().senses.statusLine() + "\n" + Views.status(a)
 							+ "\n== Surroundings ==\n" + Views.surface(a.level(), a.getBlockX(), a.getBlockZ(), radius, BlockCodec.Detail.NONE, a, true, false)
 							+ "\n== Entities ==\n" + Views.entities(a.level(), a.position(), radius * 1.5, 20, a)
 							+ "\n== Events ==\n" + drainEvents(s, args.str("agent"), 30);
@@ -237,14 +238,7 @@ public final class PerceptionTools {
 	}
 
 	private static String format(EventLog.Page page) {
-		StringBuilder sb = new StringBuilder();
-		if (page.lost()) sb.append("(Some older events were dropped from the buffer before you read them.)\n");
-		if (page.events().isEmpty()) sb.append("No new events.\n");
-		for (EventLog.Event e : page.events()) {
-			sb.append(String.format(Locale.ROOT, "#%d [tick %d] %s: %s\n", e.seq(), e.tick(), e.type(), e.text()));
-		}
-		if (page.remaining() > 0) sb.append(page.remaining()).append(" more unread; call get_events to read them.\n");
-		return sb.toString();
+		return Views.events(page, AgentsMc.session() == null ? 0 : AgentsMc.session().server.getTickCount(), 0);
 	}
 
 	/** Where a query is centred and in which dimension; {@code agent} may be null. */
