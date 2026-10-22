@@ -45,6 +45,9 @@ public final class MineIntent extends Intent {
 	private double reach = REACH;
 	private int collectTicks, approachTicks;
 	private boolean finalCollect;
+	/** Walks to drops with real pathfinding (steps, corners), never digging. */
+	private final Navigator collectNav;
+	private int collectTarget = -1;
 	private final java.util.Map<Integer, Integer> triedItems = new java.util.HashMap<>();
 	private int mined, skipped, cleared;
 	private final List<String> skippedWhy = new ArrayList<>();
@@ -54,6 +57,8 @@ public final class MineIntent extends Intent {
 		this.targets = new ArrayList<>(targets);
 		this.what = what;
 		this.nav = new Navigator(body).digReach(DIG_REACH);
+		this.collectNav = new Navigator(body);
+		this.collectNav.dig(Navigator.Dig.NEVER);
 		this.digger = new Digger(body);
 		this.snapshot = new Inventory(body);
 	}
@@ -249,12 +254,24 @@ public final class MineIntent extends Intent {
 		}
 		if (nearest == null) return false;
 		triedItems.merge(nearest.getId(), 1, Integer::sum);
+		if (nearest.getId() != collectTarget) {
+			collectTarget = nearest.getId();
+			collectNav.reset();
+		}
 		body.face(nearest.position());
 		// A drop down in a hole (where a mined block was) often lies at its edge. Aim for the middle of
 		// the hole, or the body stays propped on the rim, too high to pick it up.
 		Vec3 to = Math.abs(nearest.getY() - body.agent.getY()) > 0.5 ? Vec3.atBottomCenterOf(nearest.blockPosition()) : nearest.position();
 		// Stand on it once close: a fresh drop can't be picked up for half a second, and running past it wastes time.
-		if (to.subtract(body.agent.position()).horizontalDistanceSqr() > 0.04 || best > 0.6) body.moveToward(to, 0.6);
+		// Further away, walk there properly: in a staircase the drop is often around a corner or up a step,
+		// and pushing straight at it just presses against the wall.
+		double dist = Math.sqrt(best);
+		if (dist > 1.4) {
+			Navigator.State st = collectNav.toward(to, 0.6);
+			if (st == Navigator.State.UNREACHABLE || st == Navigator.State.STUCK) triedItems.put(nearest.getId(), GIVE_UP_TICKS);
+		} else if (to.subtract(body.agent.position()).horizontalDistanceSqr() > 0.04 || best > 0.6) {
+			body.moveToward(to, 0.6);
+		}
 		return true;
 	}
 
