@@ -1,6 +1,6 @@
 #!/bin/bash
-# Runs one client game test and records the game window with ffmpeg.
-# usage: record.sh <test name: body|live> [extra env assignments...]
+# Runs one client game test and records the game window.
+# usage: record-gametest.sh <test name: body|terrain|live|pov> [extra env assignments...]
 set -u
 ONLY="$1"; shift
 cd "$(dirname "$0")/.."
@@ -25,16 +25,14 @@ done
 sleep 1
 date +%s > "build/$ONLY-rec-start.txt"
 echo "recording started at $(date +%T)"
-"$FFMPEG" -y -f gdigrab -framerate 30 -draw_mouse 0 -i title="Minecraft* 26.3" \
-  -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p -t 1500 "$REC" > "build/$ONLY-ffmpeg.log" 2>&1 &
-FPID=$!
+python -I scripts/capture.py "Minecraft* 26.3" "$FFMPEG" "$REC" 30 1500 > "build/$ONLY-capture.log" 2>&1 &
+CPID=$!
 
 wait $GPID
 GEXIT=$?
 echo "gradle exit $GEXIT"
-sleep 2
-powershell -NoProfile -Command "Get-Process ffmpeg -ErrorAction SilentlyContinue | Stop-Process" >/dev/null 2>&1
-wait $FPID 2>/dev/null
-sleep 1
+# The game window closes with the test, and the capture stops on its own when the window is gone.
+wait $CPID 2>/dev/null
+cat "build/$ONLY-capture.log"
 ls -la "$REC"
 exit $GEXIT

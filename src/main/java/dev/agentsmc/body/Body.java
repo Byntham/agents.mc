@@ -38,7 +38,7 @@ import java.util.function.ToDoubleFunction;
  */
 public final class Body {
 	/** How fast the head turns, degrees per tick. A real player turns faster, but this reads as deliberate. */
-	private static final float TURN_RATE = 30f;
+	private static final float TURN_RATE = 15f;
 	private static final int RECENT = 6;
 
 	public final AgentPlayer agent;

@@ -95,8 +95,13 @@ public class LiveBodyTest implements FabricClientGameTest {
 			LOG.info("after the walk: agent is {} blocks from the host", agentPos().distanceTo(hostPos()));
 			ctx.takeScreenshot("live-02-followed");
 
-			// 2. Chop those logs.
+			// 2. Chop those logs. With AGENTSMC_LIVE_POV=1 the host watches through the agent's eyes.
 			run(String.format(Locale.ROOT, "tp Player0 %d %d %d 0 10", x, y, z + 6));
+			boolean pov = "1".equals(System.getenv("AGENTSMC_LIVE_POV"));
+			if (pov) {
+				run("gamemode spectator Player0");
+				run("spectate " + AGENT + " Player0");
+			}
 			chat("@" + AGENT + " see the three oak trunks south of me? chop them all down and come back to me when you're done");
 			int logsBefore = logsStanding(x, y, z);
 			waitForBrain(b -> b.status() == AgentBrain.Status.IDLE && logsStanding(x, y, z) <= 2, 20 * 240);
@@ -116,8 +121,11 @@ public class LiveBodyTest implements FabricClientGameTest {
 			watch(40);
 			ctx.takeScreenshot("live-04-fought");
 
-			// 4. Ask what happened, from a few blocks back.
+			// 4. Ask what happened, from a few blocks back, in the host's own view again.
 			Vec3 ap = agentPos();
+			if (pov) {
+				run("gamemode survival Player0");
+			}
 			run(String.format(Locale.ROOT, "tp Player0 %.1f %.1f %.1f", ap.x - 5, ap.y, ap.z - 4));
 			watch(20);
 			int says2 = world.getServer().computeOnServer(server -> count(AgentsMc.session().brains.get(AGENT), ActivityLog.Kind.SAY));
@@ -181,7 +189,7 @@ public class LiveBodyTest implements FabricClientGameTest {
 				return a == null ? null : a.getEyePosition();
 			});
 			if (at != null) ctx.runOnClient(mc -> {
-				if (mc.player != null) mc.player.lookAt(EntityAnchorArgument.Anchor.EYES, at);
+				if (mc.player != null && !mc.player.isSpectator()) mc.player.lookAt(EntityAnchorArgument.Anchor.EYES, at);
 			});
 			if (narrator != null && (watched += 2) % 6 == 0) narrator.tick();
 			ctx.waitTicks(2);
