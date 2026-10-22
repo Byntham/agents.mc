@@ -228,7 +228,8 @@ public final class BuildIntent extends Intent {
 			BlockPos feet = body.agent.blockPosition();
 			for (Job j : jobs) {
 				if (j.pos().getY() != lowest) continue;
-				double d = j.pos().distSqr(feet);
+				// A second half (a bed's head) goes after everything else in its layer: its first half makes it.
+				double d = j.pos().distSqr(feet) + (Body.isSecondHalf(j.spec().state()) ? 1e6 : 0);
 				if (d < bestD) {
 					bestD = d;
 					best = j;
