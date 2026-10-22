@@ -143,6 +143,12 @@ public final class BodyTools {
 					} else {
 						throw new ToolException("Pass block (and count), or x, y, z");
 					}
+					// Another mine call while one is running adds to the job: a model that queues "mine, wait, mine,
+					// wait" with short waits must not cancel the block it's halfway through.
+					if (a.body().current() instanceof MineIntent running && !running.finished()) {
+						int added = running.addTargets(targets);
+						return String.format(Locale.ROOT, "%s: added %d block%s of %s to the job (%s).", running.tag(), added, added == 1 ? "" : "s", what, running.progress());
+					}
 					MineIntent intent = a.body().start(new MineIntent(a.body(), targets, what).dig(args.bool("dig", !a.isCreative())));
 					BlockPos first = targets.getFirst();
 					String plan = intent.planNow(a.body());

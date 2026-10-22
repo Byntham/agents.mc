@@ -80,6 +80,18 @@ public final class MineIntent extends Intent {
 		return (nav.digging() ? "digging to " : "mining ") + what + (current == null ? "" : " at " + current.getX() + " " + current.getY() + " " + current.getZ());
 	}
 
+	/** Queues more blocks onto this job. Returns how many were new. */
+	public int addTargets(List<BlockPos> more) {
+		int added = 0;
+		for (BlockPos p : more) {
+			if (p.equals(current) || targets.contains(p)) continue;
+			targets.add(p);
+			added++;
+		}
+		if (added > 0) finalCollect = false; // more to do before the end-of-job sweep
+		return added;
+	}
+
 	@Override
 	public String progress() {
 		return mined + "/" + (mined + targets.size() + (current != null ? 1 : 0)) + " broken"
