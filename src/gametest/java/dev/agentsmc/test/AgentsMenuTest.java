@@ -175,17 +175,25 @@ public class AgentsMenuTest implements FabricClientGameTest {
 	}
 
 	private void withRealClaude(ClientGameTestContext ctx) {
-		writeConfig("", System.getenv().getOrDefault("AGENTSMC_LIVE_MODEL", "haiku"), "low");
+		// The config's model is what new agents start with; the menu sets the effort.
+		writeConfig("", System.getenv().getOrDefault("AGENTSMC_LIVE_MODEL", "haiku"), "");
 		TestWorldSave save;
 		String sessionId;
 		try (TestSingleplayerContext world = ctx.worldBuilder().adjustSettings(s -> s.setAllowCommands(true)).create()) {
 			world.getConnection().waitForChunksRender();
 			world.getServer().runCommand("time set day");
 			world.getServer().runCommand("weather clear");
-			ctx.runOnClient(mc -> mc.player.connection.sendCommand(
-					"agent spawn Helper Say hi in chat, then build a 5 by 5 cobblestone platform on the ground right next to me, and say in chat when it's done."));
+			openMenu(ctx);
+			clickGui(ctx, sideWidth(ctx) - 14, 12);
+			ctx.getInput().typeChars("Helper");
+			ctx.getInput().pressKey(InputConstants.KEY_RETURN);
+			ctx.getInput().typeChars("Say hi in chat, then build a 5 by 5 cobblestone platform on the ground right next to me, and say in chat when it's done.");
+			pick(ctx, "effort", "low", null);
+			ctx.getInput().pressKey(InputConstants.KEY_RETURN);
+			ctx.setScreen(() -> null);
 			waitForBrain(world, "Helper", b -> b.status() == AgentBrain.Status.IDLE && has(b, ActivityLog.Kind.SAY)
 					&& b.log.last().kind() == ActivityLog.Kind.INFO, 20 * 300);
+			expectSettings(world, "Helper", System.getenv().getOrDefault("AGENTSMC_LIVE_MODEL", "haiku"), "low");
 			int cobble = world.getServer().computeOnServer(server -> countNear(server.getPlayerList().getPlayers().stream()
 					.filter(p -> p.getName().getString().equals("Player0")).findFirst().orElseThrow()));
 			LOG.info("Cobblestone near the player after the live build: {}", cobble);
@@ -196,6 +204,16 @@ public class AgentsMenuTest implements FabricClientGameTest {
 			ctx.setScreen(() -> null);
 			dump(world, "Helper");
 			if (cobble < 20) throw new AssertionError("Expected a cobblestone platform near the player, found " + cobble + " blocks");
+
+			// Claude Code is still running: switching to Sonnet in the menu reaches it without a restart.
+			openMenu(ctx);
+			pick(ctx, "model", "sonnet", null);
+			waitForBrain(world, "Helper", b -> b.model().equals("sonnet"), 100);
+			ctx.setScreen(() -> null);
+			askAndExpectModel(ctx, world, "@Helper in one short sentence, what did you just build? Answer in chat.", "sonnet");
+			openMenu(ctx);
+			ctx.takeScreenshot("12-live-switched");
+			ctx.setScreen(() -> null);
 			sessionId = world.getServer().computeOnServer(server -> AgentsMc.session().brains.get("Helper").sessionId());
 			save = world.getWorldSave();
 		}
@@ -207,19 +225,44 @@ public class AgentsMenuTest implements FabricClientGameTest {
 				return s.brains.body("Helper") != null && sessionId.equals(s.brains.get("Helper").sessionId());
 			});
 			if (!back) throw new AssertionError("Helper didn't come back with its conversation after reopening the world");
-			openMenu(ctx);
-			ctx.takeScreenshot("12-reopened");
-			ctx.setScreen(() -> null);
+			expectSettings(world, "Helper", "sonnet", "low");
 
-			int says = world.getServer().computeOnServer(server -> count(AgentsMc.session().brains.get("Helper"), ActivityLog.Kind.SAY));
-			ctx.runOnClient(mc -> mc.player.connection.sendChat("@Helper what did you build for me before? Answer in chat."));
-			waitForBrain(world, "Helper", b -> count(b, ActivityLog.Kind.SAY) > says && b.status() == AgentBrain.Status.IDLE, 20 * 180);
-			ctx.waitTicks(10);
-			ctx.takeScreenshot("13-resumed-chat");
+			// No Claude Code is running after the reopen, so this switch goes on the next launch's command line.
 			openMenu(ctx);
-			ctx.takeScreenshot("14-resumed-menu");
+			pick(ctx, "model", "haiku", null);
+			waitForBrain(world, "Helper", b -> b.model().equals("haiku"), 100);
+			ctx.takeScreenshot("13-reopened");
+			ctx.setScreen(() -> null);
+			askAndExpectModel(ctx, world, "@Helper what did you build for me before? Answer in chat.", "haiku");
+			ctx.waitTicks(10);
+			ctx.takeScreenshot("14-resumed-chat");
+			openMenu(ctx);
+			ctx.takeScreenshot("15-resumed-menu");
 			ctx.setScreen(() -> null);
 			dump(world, "Helper");
+		}
+	}
+
+	/**
+	 * Asks the agent something in chat and waits for its answer. Claude Code reports the model each turn
+	 * runs on, and the agent's log shows it ("Using claude-sonnet-..."): it must name this model.
+	 */
+	private static void askAndExpectModel(ClientGameTestContext ctx, TestSingleplayerContext world, String message, String model) {
+		int says = world.getServer().computeOnServer(server -> count(AgentsMc.session().brains.get("Helper"), ActivityLog.Kind.SAY));
+		long since = world.getServer().computeOnServer(server -> AgentsMc.session().brains.get("Helper").log.last().id());
+		ctx.runOnClient(mc -> mc.player.connection.sendChat(message));
+		waitForBrain(world, "Helper", b -> count(b, ActivityLog.Kind.SAY) > says && b.status() == AgentBrain.Status.IDLE, 20 * 180);
+		String using = world.getServer().computeOnServer(server -> {
+			String last = "";
+			for (ActivityLog.Entry e : AgentsMc.session().brains.get("Helper").log.tail(300)) {
+				if (e.kind() == ActivityLog.Kind.INFO && e.text().startsWith("Using ")) last = e.id() > since ? e.text() : "";
+			}
+			return last;
+		});
+		LOG.info("Helper after switching to {}: {}", model, using);
+		if (!using.contains(model)) {
+			dump(world, "Helper");
+			throw new AssertionError("Helper's turn should have run on " + model + ", log says: " + using);
 		}
 	}
 
