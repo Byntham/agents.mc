@@ -13,6 +13,7 @@ import queue
 import sys
 import threading
 import time
+import uuid
 
 inbox = queue.Queue()
 
@@ -26,7 +27,7 @@ def read():
 
 
 threading.Thread(target=read, daemon=True).start()
-session = sys.argv[sys.argv.index("--resume") + 1] if "--resume" in sys.argv else "fake-%d" % int(time.time() * 1000)
+session = sys.argv[sys.argv.index("--resume") + 1] if "--resume" in sys.argv else str(uuid.uuid4())
 pending = []
 counter = [0]
 settings = {

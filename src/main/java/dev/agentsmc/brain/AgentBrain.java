@@ -150,18 +150,20 @@ public final class AgentBrain {
 	 * @param via where it came from, as the agent should read it, e.g. "in chat"
 	 */
 	public void send(String from, String via, String text) {
+		boolean startsTurn;
 		synchronized (this) {
 			log.add(ActivityLog.Kind.USER, from, text);
 			lastSender = from;
 			lastActive = System.currentTimeMillis();
-			if (status == Status.IDLE) {
+			startsTurn = status == Status.IDLE;
+			if (startsTurn) {
 				status = Status.STARTING;
 				activity = "Reading your message";
 				turnStart = lastActive;
 			}
 		}
 		JsonObject msg = userMessage(from + " (" + via + "): " + text, "next");
-		io.execute(() -> writeUserMessage(msg.toString()));
+		io.execute(() -> writeUserMessage(msg.toString(), startsTurn));
 	}
 
 	/**
@@ -229,13 +231,15 @@ public final class AgentBrain {
 
 	// ---- io thread ----
 
-	private void writeUserMessage(String line) {
+	/**
+	 * @param startsTurn the agent was idle when this message came, so nothing else is in flight and a
+	 *                   restart can't cut a turn short
+	 */
+	private void writeUserMessage(String line, boolean startsTurn) {
 		if (closed) return;
 		boolean restart;
 		synchronized (this) {
-			// Only when this message starts a turn (send() moved the status off IDLE): restarting a
-			// working Claude Code would cut its turn short.
-			restart = relaunch && status == Status.STARTING;
+			restart = startsTurn && relaunch;
 		}
 		if (restart && process != null && process.isAlive()) close();
 		try {
@@ -440,7 +444,7 @@ public final class AgentBrain {
 			}
 			owner.sessionChanged();
 			List<String> replay = List.copyOf(sentThisLaunch);
-			for (String line : replay) writeUserMessage(line);
+			for (String line : replay) writeUserMessage(line, false);
 			return;
 		}
 		int code = p.exitValue();

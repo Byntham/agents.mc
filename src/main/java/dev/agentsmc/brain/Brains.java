@@ -53,8 +53,8 @@ import java.util.regex.Pattern;
 public final class Brains {
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 	private static final Pattern MENTION = Pattern.compile("@([A-Za-z0-9_]{3,16})\\b");
-	/** Claude Code's session ids are UUIDs. */
-	private static final Pattern SESSION_ID = Pattern.compile("[A-Za-z0-9-]{1,64}");
+	/** Claude Code's session ids are UUIDs. Anything else, like "--help", could pass as another option after --resume. */
+	private static final Pattern SESSION_ID = Pattern.compile("\\p{XDigit}{8}(-\\p{XDigit}{4}){3}-\\p{XDigit}{12}");
 	/** An idle Claude Code process is closed after this long; the next message resumes the conversation. */
 	private static final long IDLE_CLOSE_MS = 10 * 60_000;
 

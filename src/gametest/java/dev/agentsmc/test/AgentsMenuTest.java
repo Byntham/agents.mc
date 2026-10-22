@@ -175,6 +175,7 @@ public class AgentsMenuTest implements FabricClientGameTest {
 				if (a.get("name").getAsString().equals("Scout")) {
 					a.addProperty("model", "opus & calc");
 					a.addProperty("effort", "ludicrous");
+					a.addProperty("sessionId", "--help");
 				}
 			}
 			Files.writeString(roster, saved.toString());
@@ -188,6 +189,12 @@ public class AgentsMenuTest implements FabricClientGameTest {
 			expectSettings(world, "Builder", "sonnet", "medium");
 			expectSettings(world, "OldTimer", "haiku", "high");
 			expectSettings(world, "Scout", "", "");
+			if (world.getServer().computeOnServer(server -> AgentsMc.session().brains.get("Scout").sessionId()) != null) {
+				throw new AssertionError("Scout's tampered session id should have been dropped");
+			}
+			if (world.getServer().computeOnServer(server -> AgentsMc.session().brains.get("Builder").sessionId()) == null) {
+				throw new AssertionError("Builder's session id should have survived the reload");
+			}
 		}
 	}
 
