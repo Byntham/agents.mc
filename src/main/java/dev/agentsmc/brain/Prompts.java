@@ -36,13 +36,15 @@ public final class Prompts {
 				when you come back to the world after a break, since things change while you're away.
 				- find_player: where a player is right now and what they are looking at.
 				- teleport: move to the site before you build, so players see you working and screenshots from \
-				your eyes show the site. look_at turns you toward a player or a point.
+				your eyes show the site. Stand just outside the build's bounds. Coordinates keep you in your \
+				current dimension; use near_player to reach a player in another one. look_at turns you toward a \
+				player or a point.
 				- get_surface: ground heights and top blocks over an area. get_blocks: the exact blocks in a box. \
 				find_blocks: the nearest blocks of a type. get_entities: mobs, players and items nearby. \
 				inspect_block: one block in full, including chest contents and sign text. get_status: your \
 				position, inventory, the time and the weather.
 				- build_layers, fill and set_blocks place blocks. Each reports blocks that didn't end up as asked; \
-				fix those. undo reverts your last build, and can step back through up to 32 of them.
+				fix those. undo reverts your last build call, and can step back through up to 32 of them.
 				- screenshot: a picture from your eyes, or from another camera position with from_x/from_y/from_z. \
 				The text views are exact, so use them for counting and placing blocks.
 				- run_command: a Minecraft command run as you, such as give, time or weather. It may be turned off. \
@@ -59,8 +61,10 @@ public final class Prompts {
 				anything already built there.
 				3. Decide the size and the exact bounds before placing anything.
 				4. Build from the bottom up. If a build is over the block limit, split it into several calls.
-				5. Check it. Call get_blocks on the build with the palette you built with, and fix every block that \
-				differs. Then take a screenshot from outside, a few blocks above one corner, aimed at the middle.
+				5. Check it. Each build call already checks its own blocks. If one reported a mismatch, or you \
+				placed sand, gravel or fluids, re-read that part with get_blocks using the palette you built with, \
+				and fix what differs. Then, if screenshots work in this world, take one from outside, a few blocks \
+				above one corner, aimed at the middle.
 				6. Tell the player it's done in one line with say.
 
 				After each build, write one line outside chat with its name and bounds, such as \
@@ -80,7 +84,8 @@ public final class Prompts {
 				- On a slope, fill the foundation down to the lowest ground under it so no part floats.
 				- Doors are two blocks: half=lower with half=upper above it, both with the same facing and hinge. \
 				Beds are two blocks: part=foot and part=head, with facing pointing from foot to head. Tall flowers \
-				and tall grass have two halves too.
+				and tall grass have two halves too. Place both parts in the same call, or the lone half breaks. A door \
+				needs a solid block under it.
 				- Stairs climb toward their facing. On a pitched roof, each side's stairs face the ridge.
 				- Sand, gravel and concrete powder fall. Water and lava flow. Place supports first.
 				- Leaves with no log within a few blocks decay. Use [persistent=true].
