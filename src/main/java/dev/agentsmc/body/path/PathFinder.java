@@ -85,11 +85,32 @@ public final class PathFinder {
 		BlockState state = level.getBlockState(pos);
 		if (state.getDestroySpeed(level, pos) < 0) return "unbreakable";
 		if (state.hasBlockEntity()) return "a chest, furnace or other block entity";
+		if (!natural(state)) return "something built or placed (" + state.getBlock().getDescriptionId() + ")";
 		if (!state.getFluidState().isEmpty()) return "fluid";
 		for (Direction d : Direction.values()) {
 			if (!level.getFluidState(pos.relative(d)).isEmpty()) return "water or lava next to it";
 		}
 		return null;
+	}
+
+	/**
+	 * Whether a block is part of the landscape rather than something someone built. The planner only
+	 * digs through these: a crafting table, a cobblestone wall or a door in the way is somebody's work,
+	 * and a player walks around it (or asks).
+	 */
+	public static boolean natural(BlockState state) {
+		if (state.is(BlockTags.BASE_STONE_OVERWORLD) || state.is(BlockTags.BASE_STONE_NETHER) || state.is(BlockTags.DIRT) || state.is(BlockTags.SAND)
+				|| state.is(BlockTags.LOGS) || state.is(BlockTags.LEAVES) || state.is(BlockTags.SNOW) || state.is(BlockTags.ICE) || state.is(BlockTags.TERRACOTTA)
+				|| state.is(BlockTags.NYLIUM) || state.is(BlockTags.STONE_ORE_REPLACEABLES) || state.is(BlockTags.DEEPSLATE_ORE_REPLACEABLES)
+				|| state.is(BlockTags.MOSS_REPLACEABLE) || state.is(BlockTags.REPLACEABLE)) return true;
+		Block b = state.getBlock();
+		if (b == Blocks.GRAVEL || b == Blocks.CLAY || b == Blocks.MUD || b == Blocks.MOSS_BLOCK || b == Blocks.BLACKSTONE || b == Blocks.BASALT
+				|| b == Blocks.SOUL_SAND || b == Blocks.SOUL_SOIL || b == Blocks.END_STONE || b == Blocks.CALCITE || b == Blocks.DRIPSTONE_BLOCK
+				|| b == Blocks.POINTED_DRIPSTONE || b == Blocks.SANDSTONE || b == Blocks.RED_SANDSTONE || b == Blocks.MUSHROOM_STEM
+				|| b == Blocks.BROWN_MUSHROOM_BLOCK || b == Blocks.RED_MUSHROOM_BLOCK || b == Blocks.BAMBOO || b == Blocks.SUGAR_CANE
+				|| b == Blocks.PACKED_MUD || b == Blocks.ROOTED_DIRT || b == Blocks.SNOW_BLOCK) return true;
+		String id = b.getDescriptionId();
+		return id.endsWith("_ore") || id.contains("raw_") && id.endsWith("_block");
 	}
 
 	/** Gravel, sand, concrete powder, anvils, dripstone: things that fall when what holds them is gone. */
