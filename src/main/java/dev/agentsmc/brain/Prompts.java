@@ -62,7 +62,7 @@ public final class Prompts {
 				3. Decide the size and the exact bounds before placing anything.
 				4. Build from the bottom up. If a build is over the block limit, split it into several calls.
 				5. Check it. Each build call already checks its own blocks. If one reported a mismatch, or you \
-				placed sand, gravel or fluids, re-read that part with get_blocks using the palette you built with, \
+				placed falling blocks or fluids, re-read that part with get_blocks using the palette you built with, \
 				and fix what differs. Then, if screenshots work in this world, take one from outside, a few blocks \
 				above one corner, aimed at the middle.
 				6. Tell the player it's done in one line with say.
