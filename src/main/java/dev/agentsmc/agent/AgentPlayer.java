@@ -7,6 +7,8 @@ import net.minecraft.server.level.ClientInformation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.item.ItemStack;
 
 /**
  * A server-side player driven by an AI agent instead of a game client. Humans see it as a normal
@@ -63,6 +65,13 @@ public final class AgentPlayer extends ServerPlayer {
 		boolean hurt = super.hurtServer(level, source, amount);
 		if (hurt && amount > 0 && isAlive()) body.senses.onHurt(source, amount);
 		return hurt;
+	}
+
+	@Override
+	public void onEquippedItemBroken(ItemStack stack, EquipmentSlot slot) {
+		super.onEquippedItemBroken(stack, slot);
+		// A player hears the snap and sees the empty hand; an agent needs telling, or it keeps "mining" with its fist.
+		body.event("tool", "Your " + dev.agentsmc.perception.Views.stack(stack.copyWithCount(1)) + " broke.", dev.agentsmc.perception.EventLog.WAKE);
 	}
 
 	@Override
