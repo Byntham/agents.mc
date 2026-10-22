@@ -37,15 +37,24 @@ public final class MenuPayloads {
 	/**
 	 * Client to server: do something with an agent.
 	 *
-	 * @param action "send" (text is the message), "stop", "spawn" (text is an optional first task) or "remove"
+	 * @param action "send" (text is the message), "stop", "spawn" (text is an optional first task),
+	 *               "configure" (switch to model and effort) or "remove"
+	 * @param model  for "spawn" and "configure": a model id from the menu state, "" for the default
+	 * @param effort for "spawn" and "configure": an effort id from the menu state, "" for the default
 	 */
-	public record Action(String action, String agent, String text) implements CustomPacketPayload {
+	public record Action(String action, String agent, String text, String model, String effort) implements CustomPacketPayload {
 		public static final Type<Action> TYPE = id("menu_action");
 		public static final StreamCodec<ByteBuf, Action> CODEC = StreamCodec.composite(
 				ByteBufCodecs.stringUtf8(16), Action::action,
 				ByteBufCodecs.stringUtf8(64), Action::agent,
 				ByteBufCodecs.stringUtf8(8192), Action::text,
+				ByteBufCodecs.stringUtf8(128), Action::model,
+				ByteBufCodecs.stringUtf8(16), Action::effort,
 				Action::new);
+
+		public Action(String action, String agent, String text) {
+			this(action, agent, text, "", "");
+		}
 
 		@Override
 		public Type<Action> type() {

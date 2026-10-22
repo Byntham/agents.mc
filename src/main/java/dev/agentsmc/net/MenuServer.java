@@ -4,6 +4,7 @@ import com.google.gson.JsonObject;
 import dev.agentsmc.AgentsMc;
 import dev.agentsmc.Session;
 import dev.agentsmc.brain.AgentBrain;
+import dev.agentsmc.brain.Models;
 import dev.agentsmc.mcp.ToolException;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.server.level.ServerPlayer;
@@ -57,12 +58,24 @@ public final class MenuServer {
 			}
 			case "stop" -> s.brains.get(a.agent()).stop(who);
 			case "spawn" -> {
+				checkSettings(s, a);
 				AgentBrain brain = s.brains.create(a.agent(), player);
+				brain.configure(a.model(), a.effort(), null);
 				if (!a.text().isBlank()) s.brains.send(who, player, "in the agents menu", brain, a.text());
+			}
+			case "configure" -> {
+				checkSettings(s, a);
+				s.brains.get(a.agent()).configure(a.model(), a.effort(), who);
 			}
 			case "remove" -> s.brains.remove(a.agent());
 			default -> throw new ToolException("Unknown action " + a.action());
 		}
+	}
+
+	/** Only what the menu offers may reach the claude command line. */
+	private static void checkSettings(Session s, MenuPayloads.Action a) {
+		if (!Models.isModel(s.config, a.model())) throw new ToolException("Unknown model " + a.model());
+		if (!Models.isEffort(s.config, a.effort())) throw new ToolException("Unknown effort " + a.effort());
 	}
 
 	private static void sendState(ServerPlayer player, String selected, String error) {

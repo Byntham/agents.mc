@@ -1,6 +1,9 @@
 package dev.agentsmc.test;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.mojang.blaze3d.platform.InputConstants;
 import dev.agentsmc.AgentsMc;
 import dev.agentsmc.Session;
@@ -8,6 +11,8 @@ import dev.agentsmc.brain.ActivityLog;
 import dev.agentsmc.brain.AgentBrain;
 import dev.agentsmc.client.AgentsMcClient;
 import dev.agentsmc.client.AgentsScreen;
+import dev.agentsmc.net.MenuPayloads;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest;
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestSingleplayerContext;
@@ -17,6 +22,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.storage.LevelResource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -27,6 +33,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.function.Predicate;
 
 /**
@@ -48,6 +55,7 @@ public class AgentsMenuTest implements FabricClientGameTest {
 
 	private void withFakeClaude(ClientGameTestContext ctx) {
 		writeConfig(fakeClaude().toString(), "", "");
+		TestWorldSave save;
 		try (TestSingleplayerContext world = ctx.worldBuilder().adjustSettings(s -> s.setAllowCommands(true)).create()) {
 			world.getConnection().waitForChunksRender();
 			world.getServer().runCommand("time set day");
@@ -56,18 +64,46 @@ public class AgentsMenuTest implements FabricClientGameTest {
 			openMenu(ctx);
 			ctx.takeScreenshot("01-empty");
 
-			// New agent: the + button, a name, then a first task in the message box.
+			// New agent: the + button, a name, a first task in the message box, then a model and effort.
 			clickGui(ctx, sideWidth(ctx) - 14, 12);
 			ctx.getInput().typeChars("Builder");
 			ctx.getInput().pressKey(InputConstants.KEY_RETURN);
 			ctx.getInput().typeChars("Build me a small oak cabin next to me");
+			pick(ctx, "model", "haiku", "02-model-list");
+			pick(ctx, "effort", "low", "02-effort-list");
 			ctx.waitTicks(2);
 			ctx.takeScreenshot("02-new-agent");
 			ctx.getInput().pressKey(InputConstants.KEY_RETURN);
 
 			waitForBrain(world, "Builder", b -> b.status() == AgentBrain.Status.WORKING && b.log.tail(50).size() >= 10, 600);
+			expectSettings(world, "Builder", "haiku", "low");
+			List<JsonObject> launches = fakeLog(world, "Builder").stream().filter(o -> o.has("argv")).toList();
+			if (launches.size() != 1 || !flag(launches.getFirst(), "--model", "haiku") || !flag(launches.getFirst(), "--effort", "low")) {
+				throw new AssertionError("Builder should have launched once with --model haiku --effort low: " + launches);
+			}
 			ctx.waitTicks(25);
 			ctx.takeScreenshot("03-working");
+
+			// Mid-turn: switching the model reaches the running Claude Code without a restart.
+			pick(ctx, "model", "sonnet", null);
+			waitForBrain(world, "Builder", b -> b.model().equals("sonnet"), 100);
+			waitForFakeLog(ctx, world, "Builder", log -> log.stream().anyMatch(o -> applied(o, "sonnet", "low")), 100);
+			// The keyboard works too: one row down from Low is Medium.
+			clickGui(ctx, locate(ctx, "effort"));
+			ctx.getInput().pressKey(InputConstants.KEY_DOWN);
+			ctx.getInput().pressKey(InputConstants.KEY_RETURN);
+			waitForBrain(world, "Builder", b -> b.effort().equals("medium"), 100);
+			waitForFakeLog(ctx, world, "Builder", log -> log.stream().anyMatch(o -> applied(o, "sonnet", "medium")), 100);
+			if (fakeLog(world, "Builder").stream().filter(o -> o.has("argv") || o.has("exit")).count() != 1) {
+				throw new AssertionError("Switching models shouldn't restart Builder's Claude Code: " + fakeLog(world, "Builder"));
+			}
+			if (!world.getServer().computeOnServer(server -> AgentsMc.session().brains.get("Builder").status() == AgentBrain.Status.WORKING)) {
+				throw new AssertionError("Builder should still be working after switching models");
+			}
+			// The server only takes what the menu offers.
+			ctx.runOnClient(mc -> ClientPlayNetworking.send(new MenuPayloads.Action("configure", "Builder", "", "opus & calc", "low")));
+			ctx.waitTicks(10);
+			expectSettings(world, "Builder", "sonnet", "medium");
 
 			world.getServer().runCommand("agent spawn Scout quick: find a good spot for a watchtower");
 			waitForBrain(world, "Scout", b -> b.status() == AgentBrain.Status.IDLE && has(b, ActivityLog.Kind.SAY), 600);
@@ -81,6 +117,20 @@ public class AgentsMenuTest implements FabricClientGameTest {
 			clickRow(ctx, world, "Scout");
 			ctx.waitTicks(25);
 			ctx.takeScreenshot("05-scout");
+
+			// An older Claude Code refuses to switch while running (the fake does that for names starting
+			// with "Old"): it restarts once idle, and the next message launches with the new settings.
+			world.getServer().runCommand("agent spawn OldTimer quick: look around");
+			waitForBrain(world, "OldTimer", b -> b.status() == AgentBrain.Status.IDLE && has(b, ActivityLog.Kind.SAY), 600);
+			world.getServer().runOnServer(server -> AgentsMc.session().brains.get("OldTimer").configure("haiku", "high", "Player0"));
+			waitForFakeLog(ctx, world, "OldTimer", log -> log.stream().anyMatch(o -> o.has("exit")), 200);
+			ctx.runOnClient(mc -> mc.player.connection.sendChat("@OldTimer quick: look again"));
+			waitForBrain(world, "OldTimer", b -> b.status() == AgentBrain.Status.IDLE && count(b, ActivityLog.Kind.SAY) >= 2, 600);
+			List<JsonObject> oldLaunches = fakeLog(world, "OldTimer").stream().filter(o -> o.has("argv")).toList();
+			JsonObject relaunch = oldLaunches.getLast();
+			if (oldLaunches.size() != 2 || !flag(relaunch, "--model", "haiku") || !flag(relaunch, "--effort", "high") || !flag(relaunch, "--resume", null)) {
+				throw new AssertionError("OldTimer should have resumed with --model haiku --effort high: " + oldLaunches);
+			}
 
 			world.getServer().runCommand("agent stop Builder");
 			waitForBrain(world, "Builder", b -> b.status() == AgentBrain.Status.IDLE, 200);
@@ -96,6 +146,31 @@ public class AgentsMenuTest implements FabricClientGameTest {
 			ctx.setScreen(() -> null);
 			ctx.waitTicks(5);
 			ctx.takeScreenshot("08-world");
+			save = world.getWorldSave();
+		}
+
+		// A shared world could carry anything in its roster. Values the menu doesn't offer fall back to the default.
+		Path roster = save.getSaveDirectory().resolve("agentsmc").resolve("agents.json");
+		try {
+			JsonArray saved = JsonParser.parseString(Files.readString(roster)).getAsJsonArray();
+			for (JsonElement el : saved) {
+				JsonObject a = el.getAsJsonObject();
+				if (a.get("name").getAsString().equals("Scout")) {
+					a.addProperty("model", "opus & calc");
+					a.addProperty("effort", "ludicrous");
+				}
+			}
+			Files.writeString(roster, saved.toString());
+		} catch (IOException e) {
+			throw new RuntimeException(e);
+		}
+
+		// Each agent's model and effort are saved with the world.
+		try (TestSingleplayerContext world = save.open()) {
+			world.getConnection().waitForChunksRender();
+			expectSettings(world, "Builder", "sonnet", "medium");
+			expectSettings(world, "OldTimer", "haiku", "high");
+			expectSettings(world, "Scout", "", "");
 		}
 	}
 
@@ -166,6 +241,30 @@ public class AgentsMenuTest implements FabricClientGameTest {
 		return Mth.clamp(menuWidth * 3 / 10, 110, 170);
 	}
 
+	/**
+	 * Opens the model or effort list, optionally takes a screenshot of it, and clicks the option
+	 * with this id.
+	 */
+	private static void pick(ClientGameTestContext ctx, String button, String option, String screenshot) {
+		clickGui(ctx, locate(ctx, button));
+		if (screenshot != null) {
+			ctx.waitTicks(2);
+			ctx.takeScreenshot(screenshot);
+		}
+		clickGui(ctx, locate(ctx, "option:" + option));
+	}
+
+	/** Menu coordinates of a model or effort button or option (see AgentsScreen.locate). */
+	private static int[] locate(ClientGameTestContext ctx, String what) {
+		int[] at = ctx.computeOnClient(mc -> mc.gui.screen() instanceof AgentsScreen menu ? menu.locate(what) : null);
+		if (at == null) throw new AssertionError("Nothing to click for " + what);
+		return at;
+	}
+
+	private static void clickGui(ClientGameTestContext ctx, int[] at) {
+		clickGui(ctx, at[0], at[1]);
+	}
+
 	/** Clicks at menu coordinates. */
 	private static void clickGui(ClientGameTestContext ctx, int x, int y) {
 		double perPixel = menuScale(ctx) * ctx.computeOnClient(mc -> (double) mc.getWindow().getScreenWidth() / mc.getWindow().getWidth());
@@ -197,6 +296,61 @@ public class AgentsMenuTest implements FabricClientGameTest {
 			dump(world, name);
 			throw e;
 		}
+	}
+
+	private static void expectSettings(TestSingleplayerContext world, String name, String model, String effort) {
+		String actual = world.getServer().computeOnServer(server -> {
+			AgentBrain b = AgentsMc.session().brains.get(name);
+			return b.model() + "/" + b.effort();
+		});
+		if (!actual.equals(model + "/" + effort)) throw new AssertionError(name + " should be on " + model + "/" + effort + ", is on " + actual);
+	}
+
+	/** What the fake claude wrote to fake-claude.jsonl in this agent's folder: its launches, control requests and exits. */
+	private static List<JsonObject> fakeLog(TestSingleplayerContext world, String agent) {
+		return readFakeLog(fakeLogFile(world, agent));
+	}
+
+	private static Path fakeLogFile(TestSingleplayerContext world, String agent) {
+		return world.getServer().computeOnServer(server -> server.getWorldPath(LevelResource.ROOT)
+				.resolve("agentsmc").resolve("agents").resolve(agent.toLowerCase(Locale.ROOT)).resolve("fake-claude.jsonl"));
+	}
+
+	private static List<JsonObject> readFakeLog(Path file) {
+		try {
+			if (!Files.exists(file)) return List.of();
+			return Files.readAllLines(file).stream().filter(l -> !l.isBlank()).map(l -> JsonParser.parseString(l).getAsJsonObject()).toList();
+		} catch (IOException e) {
+			throw new RuntimeException(e);
+		}
+	}
+
+	private static void waitForFakeLog(ClientGameTestContext ctx, TestSingleplayerContext world, String agent, Predicate<List<JsonObject>> done, int ticks) {
+		try {
+			Path file = fakeLogFile(world, agent);
+			ctx.waitFor(mc -> done.test(readFakeLog(file)), ticks);
+		} catch (RuntimeException | AssertionError e) {
+			LOG.info("{}'s fake claude log: {}", agent, fakeLog(world, agent));
+			throw e;
+		}
+	}
+
+	/** Whether a launch's command line has this flag, followed by this value unless it is null. */
+	private static boolean flag(JsonObject launch, String flag, String value) {
+		JsonArray argv = launch.getAsJsonArray("argv");
+		for (int i = 0; i < argv.size(); i++) {
+			if (!argv.get(i).getAsString().equals(flag)) continue;
+			return value == null || i + 1 < argv.size() && argv.get(i + 1).getAsString().equals(value);
+		}
+		return false;
+	}
+
+	private static boolean applied(JsonObject entry, String model, String effort) {
+		if (!entry.has("control")) return false;
+		JsonObject request = entry.getAsJsonObject("control");
+		if (!request.get("subtype").getAsString().equals("apply_flag_settings")) return false;
+		JsonObject settings = request.getAsJsonObject("settings");
+		return settings.get("model").getAsString().equals(model) && settings.get("effortLevel").getAsString().equals(effort);
 	}
 
 	private static boolean has(AgentBrain b, ActivityLog.Kind kind) {
