@@ -286,14 +286,8 @@ public final class MineIntent extends Intent {
 		// Further away, walk there properly: in a staircase the drop is often around a corner or up a step,
 		// and pushing straight at it just presses against the wall.
 		double dist = Math.sqrt(best);
-		double drop = body.agent.getY() - nearest.getY();
-		double across = Math.sqrt(to.subtract(body.agent.position()).horizontalDistanceSqr());
-		// A drop in a shallow hole next to the feet is reached from the rim; stepping down into the hole
-		// leaves the body standing where the next block has to go.
-		if (drop > 0.5 && drop <= 1.2 && across <= 1.3) {
-			if (across > 0.9) body.moveToward(to, 0.4); // edge closer, still on the rim
-			return true;
-		}
+		// Items only get pulled in from half a block below the feet, so a drop in a hole means stepping
+		// down into the hole, as a player does.
 		if (dist > 1.4) {
 			Navigator.State st = collectNav.toward(to, 0.6);
 			if (st == Navigator.State.UNREACHABLE || st == Navigator.State.STUCK) triedItems.put(nearest.getId(), GIVE_UP_TICKS);
