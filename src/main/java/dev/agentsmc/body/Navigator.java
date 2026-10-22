@@ -35,6 +35,8 @@ public final class Navigator {
 
 	private final Body body;
 	private final Settings settings;
+	/** Set when the last plan needed a drop deeper than the usual limit. */
+	private boolean deepDrop;
 	private Path path;
 	private int index;
 	private Vec3 plannedGoal;
@@ -62,6 +64,11 @@ public final class Navigator {
 	/** One line on the plan, for tool output. */
 	public String describe() {
 		return path == null ? "no path yet" : PathFinder.describe(path);
+	}
+
+	/** A remark for tool output, e.g. that the route includes a long drop. Empty if nothing to say. */
+	public String note() {
+		return deepDrop ? " (includes a drop of more than 3 blocks)" : "";
 	}
 
 	/** Nodes left to walk. */
@@ -162,6 +169,16 @@ public final class Navigator {
 		// In water the feet block is the water block itself; on land it's the air block above the floor.
 		Path p = PathFinder.find(agent.level(), start, BlockPos.containing(goal), Math.max(tolerance, 0.5), settings);
 		planned++;
+		// A hole or a cliff: players drop further than three blocks when they have to. A six-block
+		// fall costs a heart and a half, which beats not getting there.
+		if ((p == null || !p.reachesGoal()) && goal.y < agent.getY() - 3) {
+			Settings deeper = new Settings(6, settings.canSwim(), settings.canClimb(), settings.canJumpGaps(), settings.canOpenDoors(), settings.maxNodes(), settings.allowDangerous());
+			Path q = PathFinder.find(agent.level(), start, BlockPos.containing(goal), Math.max(tolerance, 0.5), deeper);
+			if (q != null && q.reachesGoal()) {
+				p = q;
+				deepDrop = true;
+			}
+		}
 		if (p == null || p.nodes().isEmpty()) {
 			path = null;
 			return false;

@@ -44,14 +44,16 @@ import java.util.Set;
 public final class BodyTools {
 	/** Tools whose result already is the current state, so no delta is appended. */
 	private static final Set<String> NO_DELTA = Set.of("wait", "observe", "get_events", "get_status", "spawn_agent", "despawn_agent", "list_agents");
-	private static final int MAX_WAIT_S = 240;
+	/** Claude Code aborts an MCP call that hasn't answered after 60 s. */
+	private static final int MAX_WAIT_S = 50;
 
 	private BodyTools() {
 	}
 
 	public static void register(Session s) {
 		s.tools.register("goto",
-				"Walk to a point or to a player, with pathfinding over the terrain (jumps, drops, swimming, doors). Returns at once with an intent id; "
+				"Walk to a point or to a player, with pathfinding over the terrain (jumps, drops, swimming, doors). A player target is tracked "
+						+ "until you reach them, so it works for 'come here'. Returns at once with an intent id; "
 						+ "the body keeps walking while you do other things. You get a '<id> done/failed' event when it ends, so call wait to let it happen.",
 				Schema.of().agent(true)
 						.number("x", "Target x", false).number("y", "Target y (the block your feet should end up in)", false).number("z", "Target z", false)
@@ -60,15 +62,14 @@ public final class BodyTools {
 						.number("tolerance", "How close counts as arrived, in blocks (default 1.5)", false),
 				args -> OnServer.call(s.server, () -> {
 					AgentPlayer a = s.agents.get(args.str("agent"));
-					Vec3 target;
-					double tolerance = args.number("tolerance", 1.5);
+					GotoIntent intent;
 					if (args.has("near_player")) {
 						ServerPlayer p = Targets.player(s, args.str("near_player"));
 						if (p.level() != a.level()) throw new ToolException(p.getName().getString() + " is in another dimension");
-						target = p.position();
-						tolerance = Math.max(tolerance, args.number("distance", 2));
+						if (p == a) throw new ToolException("That's you");
+						intent = new GotoIntent(a.body(), p.getName().getString(), Math.max(args.number("tolerance", 1.5), args.number("distance", 2)));
 					} else if (args.has("x") && args.has("y") && args.has("z")) {
-						target = new Vec3(args.number("x"), args.number("y"), args.number("z"));
+						intent = new GotoIntent(a.body(), new Vec3(args.number("x"), args.number("y"), args.number("z")), args.number("tolerance", 1.5));
 					} else {
 						throw new ToolException("Pass x, y and z, or near_player");
 					}
@@ -76,7 +77,7 @@ public final class BodyTools {
 						a.getAbilities().flying = false;
 						a.onUpdateAbilities();
 					}
-					GotoIntent intent = a.body().start(new GotoIntent(a.body(), target, tolerance));
+					a.body().start(intent);
 					Navigator.State first = intent.planNow(a.body());
 					String plan = switch (first) {
 						case ARRIVED -> "already there";
@@ -160,7 +161,7 @@ public final class BodyTools {
 					double radius = Math.max(1, Math.min(32, args.number("radius", 8)));
 					java.util.function.Predicate<ItemEntity> match = item.isEmpty() ? e -> true : e -> Views.stack(e.getItem().copyWithCount(1)).contains(item);
 					List<ItemEntity> items = a.level().getEntitiesOfClass(ItemEntity.class, a.getBoundingBox().inflate(radius), match);
-					if (items.isEmpty()) throw new ToolException("No " + (item.isEmpty() ? "dropped items" : item + " items") + " within " + (int) radius + " blocks.");
+					if (items.isEmpty()) return "Nothing to pick up: no " + (item.isEmpty() ? "dropped items" : item + " items") + " within " + (int) radius + " blocks.";
 					CollectIntent intent = a.body().start(new CollectIntent(a.body(), match, item.isEmpty() ? "items" : item, radius));
 					return intent.tag() + " started: " + items.size() + " item stack" + (items.size() == 1 ? "" : "s") + " nearby.";
 				}));

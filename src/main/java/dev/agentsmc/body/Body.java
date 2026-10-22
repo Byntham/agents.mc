@@ -398,8 +398,15 @@ public final class Body {
 		Direction face = Direction.getApproximateNearest(eye.x - centre.x, eye.y - centre.y, eye.z - centre.z);
 		Vec3 aim = centre.add(Vec3.atLowerCornerOf(face.getUnitVec3i()).scale(0.5));
 		Vec3 to = eye.add(aim.subtract(eye).normalize().scale(agent.blockInteractionRange() + 1.5));
-		BlockHitResult hit = agent.level().clip(new ClipContext(eye, to, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, agent));
+		// Only solid blocks block the view: short grass in the agent's own block must not stop it mining the block it stands on.
+		BlockHitResult hit = agent.level().clip(new ClipContext(eye, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, agent));
 		if (hit.getType() == HitResult.Type.BLOCK && hit.getBlockPos().equals(target)) return hit;
+		// The target itself has no collision shape (grass, flowers, torches): it's in view if nothing solid is in front of it.
+		BlockState state = agent.level().getBlockState(target);
+		if (state.getCollisionShape(agent.level(), target).isEmpty()) {
+			double toTarget = eye.distanceTo(aim);
+			if (hit.getType() != HitResult.Type.BLOCK || eye.distanceTo(hit.getLocation()) > toTarget - 0.2) return new BlockHitResult(aim, face, target, false);
+		}
 		return null;
 	}
 

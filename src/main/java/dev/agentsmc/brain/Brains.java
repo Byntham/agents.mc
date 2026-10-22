@@ -165,10 +165,11 @@ public final class Brains {
 		if (body == null) {
 			if (near != null) {
 				Vec3 pos = Targets.inFrontOf(near, 2);
-				body = spawnBody(name, near.level(), pos, Targets.yawToward(pos, near.position()), GameType.CREATIVE);
+				// Play the same game the human plays: a survival player gets a survival companion.
+				body = spawnBody(name, near.level(), pos, Targets.yawToward(pos, near.position()), near.gameMode());
 			} else {
 				ServerLevel level = s.server.overworld();
-				body = spawnBody(name, level, Vec3.atBottomCenterOf(level.getRespawnData().pos()), 0, GameType.CREATIVE);
+				body = spawnBody(name, level, Vec3.atBottomCenterOf(level.getRespawnData().pos()), 0, s.server.getDefaultGameType());
 			}
 		}
 		if (brain == null) {

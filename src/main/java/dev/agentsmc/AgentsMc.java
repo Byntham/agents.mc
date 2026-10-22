@@ -13,6 +13,7 @@ import dev.agentsmc.perception.EventLog;
 import dev.agentsmc.tools.AgentTools;
 import dev.agentsmc.tools.BodyTools;
 import dev.agentsmc.tools.BuildTools;
+import dev.agentsmc.tools.CraftTools;
 import dev.agentsmc.tools.PerceptionTools;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
@@ -97,6 +98,7 @@ public class AgentsMc implements ModInitializer {
 		PerceptionTools.register(s);
 		BuildTools.register(s);
 		BodyTools.register(s);
+		CraftTools.register(s);
 		s.brains = new Brains(s);
 		s.events.listen(s.waiters::onEvent);
 		s.events.listen(s.brains::onEvent);

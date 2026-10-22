@@ -219,7 +219,7 @@ public final class Senses {
 			} else if (e instanceof ServerPlayer p && !AgentManager.isAgent(p)) {
 				if (dist < 4 && !t.near) {
 					t.near = true;
-					body.event("player", String.format(Locale.ROOT, "%s came up to you, %s.", t.name, relative(agent, e.position())), EventLog.NOTABLE);
+					body.event("player", String.format(Locale.ROOT, "%s is close now, %s.", t.name, relative(agent, e.position())), EventLog.NOTABLE);
 				} else if (dist > 8) {
 					t.near = false;
 				}
