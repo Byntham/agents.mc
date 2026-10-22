@@ -1,19 +1,20 @@
 # agents.mc
 
-A Fabric mod for Minecraft Java Edition 26.3 that lets AI agents join your world as players and build with you.
+A Fabric mod for Minecraft Java Edition 26.3 that lets AI agents join your world as players: they walk, follow you, mine, fight and build with you.
 
 Each agent gets a real player body: a name tag, a tab-list entry, an inventory, and survival physics. Humans see it as another player. There are two ways to run agents:
 
 - **From inside the game.** `/agent spawn Builder build me a house` starts an agent that runs on your own Claude Code login. You talk to it in chat with `@Builder ...`, and press K for a menu that shows what each agent is doing.
 - **From any MCP client.** The mod runs an MCP server on `http://127.0.0.1:25590/mcp`, so Claude Code or another client outside the game can drive bodies.
 
-Agents control their bodies through MCP tools either way. They see the world mostly as structured text:
+Agents control their bodies through MCP tools either way. Long actions (walking somewhere, following you, mining, fighting) run on the body tick by tick while the model waits for something to happen. They see the world mostly as structured text:
 
 - palette grids of exact blocks;
 - top-down height/terrain maps;
 - entity lists;
 - block search;
-- a feed of chat and block changes made by others.
+- a feed of chat and block changes made by others;
+- their own senses: a mob closing in, a sound and where it came from, damage and what dealt it, a player walking up, dusk.
 
 ```
 y=119:
@@ -34,8 +35,22 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the modding background, the
 | | |
 |---|---|
 | Bodies | `spawn_agent`, `despawn_agent`, `list_agents`, `teleport`, `look_at`, `say`, `run_command` |
-| Perception | `observe` (status + map + entities + new events in one call), `find_player` (where someone is now and what they're looking at), `get_status`, `get_blocks`, `get_surface`, `get_entities`, `find_blocks`, `inspect_block`, `get_events`, `screenshot` |
+| Playing | `goto`, `follow`, `mine`, `attack`, `collect` (intents the body carries out on its own), `cancel`, `wait` (block until something happens), `set_reflexes`, `hold`, `eat`, `drop`, `place_block`, `use_block` |
+| Perception | `observe` (status + map + entities + new events in one call), `sweep` (what is in each direction), `find_player` (where someone is now and what they're looking at), `get_status`, `get_blocks`, `get_surface`, `get_entities`, `find_blocks`, `inspect_block`, `get_events`, `screenshot` |
 | Building | `set_blocks`, `fill`, `build_layers` (same grid format as `get_blocks`), `undo` |
+
+## Playing in real time
+
+A model takes seconds per decision and a Minecraft tick is 50 ms, so the body does the moment-to-moment work itself:
+
+- **Intents.** `goto`, `follow`, `mine`, `attack` and `collect` return at once with an id like `goto#3`. The body walks the path (with jumps, drops, swimming and doors), swings the right tool for the block's break time, hits when the attack cooldown allows, and picks up drops. When the intent ends, the agent gets an event: `goto#3 done: arrived at 100 64 -20 after 12.4s`.
+- **Reflexes.** Without asking the model, the body eats when food is low, hits back at a mob that hit it, and backs away from a creeper about to explode. Each reflex says what it did as an event. `set_reflexes` turns them off.
+- **The meanwhile block.** Every tool result ends with one status line (position, facing, footing, health, food, time, light, what is in hand, what the body is doing) and the events since the agent last looked. The model never acts on stale state.
+- **`wait`.** While the body works, the model calls `wait`. It returns as soon as something notable happens (an intent finishes, damage, a mob closing in, a player talking) or when the time runs out. It costs nothing while waiting.
+- **Senses.** Events are written in the second person with distance, compass direction and where that is relative to the agent's facing: `You heard a creeper hissing, 2m E (ahead).`, `Steve is 20m NE (ahead-left).`, `You took 3 damage from the zombie 2m SW (behind). Health 14/20.` They cover hearing (the server's sounds), damage, hostile mobs appearing and closing in, players walking up or out of range, hunger, light, time of day, lava and drowning.
+- **Waking up.** An idle agent whose body senses something important (damage, a mob coming for it, a task finishing, sunset) gets a message from `World` and decides what to do, at most once every 20 seconds. `wakeOnEvents: false` turns this off.
+
+Survival bodies (`spawn_agent` with `gamemode: survival`, or `/gamemode survival Name`) mine with real tools and place blocks from their inventory with `place_block`. The instant build tools stay creative-style.
 
 ## Screenshots
 

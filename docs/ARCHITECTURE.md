@@ -155,9 +155,33 @@ The renderer keeps state tied to the host's camera. Client mixins hold that stat
 
 At most two screenshot calls run at once, since each holds one of the MCP server's worker threads until its picture is ready.
 
+### Playing in real time
+
+A model's decision takes seconds and a tick is 50 ms. [REALTIME_PLAY.md](REALTIME_PLAY.md) has the research behind the design; this is what was built.
+
+**The body (`body/Body`).** Each `AgentPlayer` has a controller that runs at the start of its tick, before the physics tick reads the movement input. It sets `xxa`, `zza` and `jumping` in an `applyInput()` override, sprint and sneak flags, and the look direction (turned at 30 degrees per tick so it reads as deliberate), and it reports movement for hunger and stats as a client would. Intents and reflexes write input into it; it holds nothing between ticks.
+
+**Intents (`body/Intent`).** One long-running action at a time: `GotoIntent`, `FollowIntent`, `MineIntent`, `AttackIntent`, `CollectIntent`. A tool starts one and returns its id; the body ticks it; when it ends (done, failed, cancelled) the agent's event feed gets `goto#3 done: ...` with salience high enough to wake an idle agent. A reflex can push its own intent on top of a pausable one and the paused one resumes afterwards.
+
+**Walking (`body/Navigator`, `body/path`).** Vanilla's pathfinder only works for `Mob`, so `PathFinder` is an A* over the block grid for a 1x2 body: walk (8-way, no corner clipping), step up one, drop up to three (any depth into water), two-block gap jumps, ladders, swimming, doors and gates. The navigator follows the path node by node, jumps for step-ups and gaps, floats in water, opens doors, and re-plans when the goal drifts or no progress is made for two seconds. Searches are capped at 6000 nodes; a partial path toward the closest explored node is walked and then re-planned.
+
+**Mining and the hands.** `MineIntent` walks within reach, looks at the block through a real ray cast, picks the fastest tool in the inventory (respecting the right tool for drops), and drives `ServerPlayerGameMode.handleBlockBreakAction` like a held mouse button: start, accumulate `getDestroyProgress` per tick, stop at 1.0, five ticks between blocks. Drops are picked up by walking onto them. `AttackIntent` uses `Player.attack` gated on the attack cooldown. Placing and using blocks go through `useItemOn` with a hit result on the right face.
+
+**Reflexes (`body/Reflexes`).** Auto-eat when food is at 14 or below and no mob targets the agent, fight back at a monster that hit it within the last two seconds, and back away from a swelling creeper. No model involved; each reports what it did as an event.
+
+**Senses (`perception/Senses`).** Second-person lines with distance, compass and relative direction (`8m NE (ahead-right)`), each with a salience: quiet, notable, wake, urgent. Sources: a mixin on `ServerLevel.playSeededSound` (hearing, with per-sound cooldowns and a filter for noise), `hurtServer` (damage with its source, coalesced over half a second), a scan every half second for hostile mobs within 16 and players within 32 (appeared, coming for you, closing in, out of range), light under 7, the time-of-day phase, lava and air. `statusLine()` is the one-line state on every message. `sweep()` casts rays in eight directions for a cheap look around.
+
+**The event log.** Events now carry an `audience` (the one agent whose senses produced it, or null for everyone) and a `salience`. `since` filters by audience, and listeners get every event as it is added: `Waiters` completes blocked `wait` calls, and `Brains` wakes idle agents.
+
+**Meanwhile.** `McpServer` appends a hook's text to every tool result that acts as an agent. The hook (`BodyTools.meanwhile`) returns the status line plus the unread events, draining the agent's cursor, except for tools that already return the current state (`wait`, `observe`, `get_events`).
+
+**`wait`.** Blocks the MCP worker thread (never the server thread) on a `CompletableFuture` completed by the next qualifying event, up to 240 seconds, under Claude Code's five-minute idle timeout for MCP calls. The MCP executor is an uncapped cached pool so blocked waits don't starve other calls.
+
+**Waking idle agents.** `Brains.onEvent` passes events with salience wake or higher to the agent's brain. If the brain is idle, `AgentBrain.worldEvent` batches them for 1.5 seconds (at most one wake per 20 seconds) and sends them as a message from `World`; a working brain sees them in its next tool result instead.
+
 ### Actions
 
-- **Movement:** `teleport` (to coordinates or `near_player`), `look_at` (a point or a `player`). Pathfinding and walking are on the roadmap.
+- **Movement:** `goto` and `follow` walk; `teleport` (to coordinates or `near_player`) and `look_at` (a point or a `player`) remain for creative play.
 - **Chat:** `say`.
 - **Commands:** `run_command`, executed as the agent at gamemaster level, so the full vanilla command set (`/give`, `/clone`, `/summon`...) is available. Owner-level commands like `/stop` are not.
 - **Building:** `set_blocks`, `fill` (solid/hollow/outline, optional replace filter), `build_layers`.
@@ -252,7 +276,7 @@ When the world opens, every saved agent's body comes back where it was, idle. It
 
 Rough order:
 
-1. **Survival-mode play:** walking with A* pathfinding over the block grid; mining with tool and break times; placing from inventory; crafting, smelting and containers.
+1. **Survival-mode play, the rest:** crafting, smelting and containers (the server API is there: `openMenu`, `AbstractContainerMenu.clicked`, `handlePlacement`); bows and shields; sleeping; boats.
 2. **Push instead of poll for outside clients:** agents the mod runs already get messages pushed to them. Outside MCP clients still poll; a `wait_for_events` long-poll tool (or a `subscriptions/listen` stream) would let them idle until someone talks to them.
 3. **Structure I/O:** read and write vanilla `.nbt` structure files and schematics, and copy/paste regions between agents.
 4. **Skins:** fetch textures for a chosen skin so agents look distinct.
