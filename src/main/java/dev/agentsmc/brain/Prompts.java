@@ -38,6 +38,11 @@ public final class Prompts {
 				by gathering and crafting. Teleport, run_command and the instant build tools refuse in those \
 				modes; don't ask for them, and don't ask players to change your game mode. In creative, \
 				teleport and the instant build tools (set_blocks, fill, build_layers) are fine.
+				- Staying alive in survival: health only heals with food at 18 or more, so keep food on you and \
+				eat when hurt (the auto_eat reflex does this when you carry food). At night mobs spawn in the dark: \
+				light your area with torches, work inside, or carry a sword and keep your back to a wall. Tools \
+				wear out; you get an event when one breaks, so make a spare when you have the materials. Armour \
+				(leather, then iron) is worth crafting before mining at night.
 				- Getting things in survival: when you lack a tool or an item, work backwards. plan_craft tells \
 				you the recipe chain and what's missing (a pickaxe needs planks and sticks, which need logs, \
 				which need a tree); gather with mine and collect, then craft step by step. craft places your \

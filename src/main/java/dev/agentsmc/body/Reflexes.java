@@ -81,7 +81,10 @@ public final class Reflexes {
 			body.event("reflex", String.format(Locale.ROOT, "Ate something. Food %d/20.", agent.getFoodData().getFoodLevel()), EventLog.QUIET);
 			return;
 		}
-		if (food > 14 || agent.isUsingItem()) {
+		// Hungry, or hurt and not healing: health only comes back with food at 18 or more, so a player
+		// eats to heal as well as to stop starving.
+		boolean healing = agent.getHealth() < agent.getMaxHealth() - 1 && food < 18;
+		if (food > 14 && !healing || agent.isUsingItem()) {
 			if (food > 10) lastFoodWarn = Integer.MAX_VALUE;
 			return;
 		}

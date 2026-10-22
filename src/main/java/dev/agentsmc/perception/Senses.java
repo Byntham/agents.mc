@@ -56,7 +56,7 @@ public final class Senses {
 	private float pendingDamage;
 	private String pendingDamageFrom;
 	private int damageTick = -1000;
-	private int lavaTick = -1000, airTick = -1000;
+	private int lavaTick = -1000, airTick = -1000, healTick = -100000;
 
 	/** One entity we're keeping an eye on. */
 	private static final class Track {
@@ -271,6 +271,13 @@ public final class Senses {
 
 	private void hazards() {
 		int t = agent.tickCount;
+		// Health only regenerates with food at 18 or more. Say so once in a while, or the agent walks
+		// around at half health for an hour without thinking of eating or cooking.
+		if (agent.getHealth() <= agent.getMaxHealth() * 0.6 && agent.getFoodData().getFoodLevel() < 18 && t - healTick > 20 * 120) {
+			healTick = t;
+			body.event("health", String.format(Locale.ROOT, "Health %.0f/%.0f and not recovering: it only heals with food at 18 or more (you have %d). Eat, or get and cook food.",
+					agent.getHealth(), agent.getMaxHealth(), agent.getFoodData().getFoodLevel()), EventLog.WAKE);
+		}
 		if (agent.isInLava() && t - lavaTick > 40) {
 			lavaTick = t;
 			body.event("hazard", "You are in lava!", EventLog.URGENT);
