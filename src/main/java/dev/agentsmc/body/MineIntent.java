@@ -23,7 +23,10 @@ import java.util.Locale;
  * line of sight is broken out of the way.
  */
 public final class MineIntent extends Intent {
-	private static final int COLLECT_TICKS = 100;
+	/** After each block: a quick grab of drops right here. At the end: a wider sweep. */
+	private static final int COLLECT_TICKS = 30, FINAL_COLLECT_TICKS = 100;
+	/** An item still not picked up after this many ticks of trying isn't reachable; leave it. */
+	private static final int GIVE_UP_TICKS = 40;
 	/** In the open, anywhere within reach will do. */
 	private static final double REACH = 3.2;
 	/** Underground, stand right next to the block, or there's stone in between. */
@@ -41,6 +44,8 @@ public final class MineIntent extends Intent {
 	private BlockPos blocking;
 	private double reach = REACH;
 	private int collectTicks, approachTicks;
+	private boolean finalCollect;
+	private final java.util.Map<Integer, Integer> triedItems = new java.util.HashMap<>();
 	private int mined, skipped, cleared;
 	private final List<String> skippedWhy = new ArrayList<>();
 
@@ -91,6 +96,11 @@ public final class MineIntent extends Intent {
 		}
 		if (current == null) {
 			if (!pickNext(body)) {
+				if (!finalCollect) {
+					finalCollect = true;
+					collectTicks = FINAL_COLLECT_TICKS;
+					return;
+				}
 				String gained = snapshot.gained(body);
 				done(String.format(Locale.ROOT, "mined %d %s%s%s%s", mined, what, gained.isEmpty() ? "" : ", picked up " + gained,
 						dug() == 0 ? "" : "; dug through " + dug() + " other block" + (dug() == 1 ? "" : "s") + " to get there",
@@ -187,7 +197,9 @@ public final class MineIntent extends Intent {
 	/** Nearest remaining target that still exists. */
 	private boolean pickNext(Body body) {
 		Vec3 here = body.agent.position();
-		targets.sort(Comparator.comparingDouble(p -> p.distSqr(BlockPos.containing(here))));
+		BlockPos feet = BlockPos.containing(here);
+		// A block in reach and in sight costs no walking or digging, so it goes first even if another is nearer as the crow flies.
+		targets.sort(Comparator.comparingDouble((BlockPos p) -> body.inReach(p) && body.sight(p) != null ? 0 : 1).thenComparingDouble(p -> p.distSqr(feet)));
 		while (!targets.isEmpty()) {
 			BlockPos p = targets.removeFirst();
 			BlockState s = body.level().getBlockState(p);
@@ -221,7 +233,11 @@ public final class MineIntent extends Intent {
 
 	/** Walks onto nearby drops so they get picked up. Returns false when there is nothing to collect. */
 	private boolean collectDrops(Body body) {
-		List<ItemEntity> items = body.level().getEntitiesOfClass(ItemEntity.class, body.agent.getBoundingBox().inflate(6, 3, 6), e -> true);
+		// Between blocks only grab what's right here; the wider sweep is for the end. Items that resist
+		// pickup for a while (on a ledge, in a crevice) are left alone instead of stalling the job.
+		double range = finalCollect ? 6 : 2.5;
+		List<ItemEntity> items = body.level().getEntitiesOfClass(ItemEntity.class, body.agent.getBoundingBox().inflate(range, finalCollect ? 3 : 1.5, range),
+				e -> triedItems.getOrDefault(e.getId(), 0) < GIVE_UP_TICKS);
 		ItemEntity nearest = null;
 		double best = Double.MAX_VALUE;
 		for (ItemEntity e : items) {
@@ -232,6 +248,7 @@ public final class MineIntent extends Intent {
 			}
 		}
 		if (nearest == null) return false;
+		triedItems.merge(nearest.getId(), 1, Integer::sum);
 		body.face(nearest.position());
 		// A drop down in a hole (where a mined block was) often lies at its edge. Aim for the middle of
 		// the hole, or the body stays propped on the rim, too high to pick it up.
