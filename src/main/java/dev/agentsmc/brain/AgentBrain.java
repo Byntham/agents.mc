@@ -73,7 +73,10 @@ public final class AgentBrain {
 	private String model, effort;
 	/** The model Claude Code last said it runs, e.g. claude-haiku-5-5. */
 	private String runningModel;
-	/** Claude Code refused a settings change, so restart it (resuming the conversation) once idle. */
+	/**
+	 * Claude Code refused a settings change, so restart it (resuming the conversation) before the next
+	 * message that starts a turn.
+	 */
 	private boolean relaunch;
 	private Set<String> capabilities = Set.of();
 	private Status status = Status.IDLE;
@@ -228,6 +231,13 @@ public final class AgentBrain {
 
 	private void writeUserMessage(String line) {
 		if (closed) return;
+		boolean restart;
+		synchronized (this) {
+			// Only when this message starts a turn (send() moved the status off IDLE): restarting a
+			// working Claude Code would cut its turn short.
+			restart = relaunch && status == Status.STARTING;
+		}
+		if (restart && process != null && process.isAlive()) close();
 		try {
 			if (!ensureProcess()) return;
 			sentThisLaunch.add(line);
@@ -386,22 +396,9 @@ public final class AgentBrain {
 		} catch (IOException e) {
 			AgentsMc.LOGGER.warn("Agents MC: could not change {}'s model", name, e);
 			synchronized (this) {
-				relaunchWhenIdle();
+				relaunch = true;
 			}
 		}
-	}
-
-	/** Restarts Claude Code once the turn is over, so the new launch picks up the current settings. */
-	private void relaunchWhenIdle() {
-		if (closed) return;
-		relaunch = true;
-		if (status != Status.IDLE) return; // onResult comes back here
-		io.execute(() -> {
-			synchronized (this) {
-				if (status != Status.IDLE || !relaunch) return;
-			}
-			close();
-		});
 	}
 
 	/** Kills the process and its children: an npm install on Windows runs claude under cmd.exe. */
@@ -575,9 +572,13 @@ public final class AgentBrain {
 			case "result" -> onResult(msg);
 			case "control_response" -> {
 				JsonObject response = msg.has("response") && msg.get("response").isJsonObject() ? msg.getAsJsonObject("response") : new JsonObject();
-				if (str(response, "request_id").startsWith(SETTINGS_REQUEST) && "error".equals(str(response, "subtype"))) {
-					AgentsMc.LOGGER.info("Agents MC: {}'s Claude Code can't switch models while running ({}), so it restarts", name, str(response, "error"));
-					relaunchWhenIdle();
+				if (!str(response, "request_id").startsWith(SETTINGS_REQUEST)) return;
+				if ("error".equals(str(response, "subtype"))) {
+					AgentsMc.LOGGER.info("Agents MC: {}'s Claude Code can't switch models while running ({}), so it restarts before the next turn",
+							name, str(response, "error"));
+					relaunch = true;
+				} else {
+					relaunch = false; // a later switch went through, so the current settings are in effect
 				}
 			}
 			case "rate_limit_event" -> {
@@ -598,7 +599,6 @@ public final class AgentBrain {
 		toolNames.clear();
 		boolean stopped = stopRequested;
 		setIdle();
-		if (relaunch) relaunchWhenIdle();
 		if (!error) {
 			log.add(ActivityLog.Kind.INFO, null, "Finished in " + Summaries.duration(ms));
 			return;

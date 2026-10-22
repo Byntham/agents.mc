@@ -9,6 +9,7 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.CharacterEvent;
 import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
@@ -16,7 +17,10 @@ import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.util.Mth;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.function.IntConsumer;
 
 /**
@@ -98,9 +102,10 @@ public final class AgentsScreen extends Screen {
 	private List<Option> efforts = List.of();
 	/** What a new agent starts with, from the host's config. */
 	private Settings defaults = new Settings("", "");
-	/** The model and effort picked in the new-agent form. */
-	private Settings newSettings = defaults;
-	private Pending pending;
+	/** The model and effort picked in the new-agent form, or null to use the defaults. */
+	private Settings newSettings;
+	/** Changes not yet confirmed by a snapshot, by lowercased agent name. */
+	private final Map<String, Pending> pending = new HashMap<>();
 	/** The open model or effort list, or null. */
 	private Picker picker;
 	/** The highlighted row in the open list. */
@@ -221,10 +226,10 @@ public final class AgentsScreen extends Screen {
 					a.get("model").getAsString(), a.get("effort").getAsString()));
 		}
 		agents = list;
-		if (pending != null) {
-			Agent p = agent(pending.agent());
-			if (p == null || new Settings(p.model(), p.effort()).equals(pending.settings())) pending = null;
-		}
+		pending.values().removeIf(p -> {
+			Agent a = agent(p.agent());
+			return a == null || new Settings(a.model(), a.effort()).equals(p.settings()) || System.currentTimeMillis() >= p.until();
+		});
 		if (o.has("error")) showError(o.get("error").getAsString());
 
 		String sel = o.has("selected") ? o.get("selected").getAsString() : null;
@@ -262,10 +267,11 @@ public final class AgentsScreen extends Screen {
 
 	/** The model and effort the composer shows: the new agent's, or the selected agent's. Null if neither. */
 	private Settings settings() {
-		if (creating) return newSettings;
+		if (creating) return newSettings != null ? newSettings : defaults;
 		Agent a = selected == null ? null : agent(selected);
 		if (a == null) return null;
-		if (pending != null && pending.agent().equalsIgnoreCase(a.name()) && System.currentTimeMillis() < pending.until()) return pending.settings();
+		Pending p = pending.get(a.name().toLowerCase(Locale.ROOT));
+		if (p != null && System.currentTimeMillis() < p.until()) return p.settings();
 		return new Settings(a.model(), a.effort());
 	}
 
@@ -284,7 +290,7 @@ public final class AgentsScreen extends Screen {
 	}
 
 	private void startCreating() {
-		if (!creating) newSettings = defaults;
+		if (!creating) newSettings = null;
 		closePicker();
 		creating = true;
 		updateWidgets();
@@ -292,7 +298,8 @@ public final class AgentsScreen extends Screen {
 	}
 
 	private void submit() {
-		if (!canUse) return;
+		// Before the first snapshot there are no defaults or agents to go on.
+		if (!canUse || !loaded) return;
 		String text = composer.getValue().strip();
 		if (creating) {
 			String name = nameBox.getValue().strip();
@@ -301,7 +308,8 @@ public final class AgentsScreen extends Screen {
 				setFocused(nameBox);
 				return;
 			}
-			ClientPlayNetworking.send(new MenuPayloads.Action("spawn", name, text, newSettings.model(), newSettings.effort()));
+			Settings chosen = settings();
+			ClientPlayNetworking.send(new MenuPayloads.Action("spawn", name, text, chosen.model(), chosen.effort()));
 			nameBox.setValue("");
 			composer.setValue("");
 			select(name);
@@ -338,7 +346,7 @@ public final class AgentsScreen extends Screen {
 		if (creating) {
 			newSettings = next;
 		} else if (selected != null) {
-			pending = new Pending(selected, next, System.currentTimeMillis() + 3000);
+			pending.put(selected.toLowerCase(Locale.ROOT), new Pending(selected, next, System.currentTimeMillis() + 3000));
 			ClientPlayNetworking.send(new MenuPayloads.Action("configure", selected, "", next.model(), next.effort()));
 		}
 	}
@@ -370,10 +378,9 @@ public final class AgentsScreen extends Screen {
 				pickerIndex = Math.floorMod(pickerIndex + (event.isUp() ? -1 : 1), options.size());
 				return true;
 			}
-			if (event.isConfirmation()) {
-				if (pickerIndex < options.size()) choose(picker, options.get(pickerIndex).id());
-				return true;
-			}
+			if (event.isConfirmation() && pickerIndex < options.size()) choose(picker, options.get(pickerIndex).id());
+			// The open list takes every key, so typing doesn't edit the message behind it.
+			return true;
 		}
 		if (event.isConfirmation()) {
 			if (creating && nameBox.isFocused()) {
@@ -399,7 +406,10 @@ public final class AgentsScreen extends Screen {
 					return true;
 				}
 			}
+			Picker open = picker;
 			closePicker();
+			Hit other = open == Picker.MODEL ? effortChip : modelChip;
+			if (other != null && other.contains(e.x(), e.y())) other.action().run();
 			return true;
 		}
 		if (super.mouseClicked(e, doubleClick)) return true;
@@ -423,13 +433,21 @@ public final class AgentsScreen extends Screen {
 	}
 
 	@Override
+	public boolean charTyped(CharacterEvent event) {
+		return picker != null || super.charTyped(event);
+	}
+
+	@Override
 	public void mouseMoved(double x, double y) {
+		// Only a moving mouse moves the highlight, so the arrow keys work with the pointer over the list.
+		for (int i = 0; i < pickerRows.size(); i++) if (pickerRows.get(i).contains(x / zoom, y / zoom)) pickerIndex = i;
 		super.mouseMoved(x / zoom, y / zoom);
 	}
 
 	@Override
 	public boolean mouseScrolled(double guiX, double guiY, double scrollX, double scrollY) {
 		double x = guiX / zoom, y = guiY / zoom;
+		if (picker != null) return true;
 		if (x < sideW) {
 			sideScroll -= (int) (scrollY * ROW_H);
 			return true;
@@ -468,7 +486,7 @@ public final class AgentsScreen extends Screen {
 		else drawEmpty(g);
 		drawComposer(g, mouseX, mouseY);
 		super.extractRenderState(g, mouseX, mouseY, partialTick);
-		drawPicker(g, mouseX, mouseY);
+		drawPicker(g);
 		g.pose().popMatrix();
 	}
 
@@ -740,7 +758,7 @@ public final class AgentsScreen extends Screen {
 	}
 
 	/** The open model or effort list, above its button and over everything else. */
-	private void drawPicker(GuiGraphicsExtractor g, int mx, int my) {
+	private void drawPicker(GuiGraphicsExtractor g) {
 		pickerRows.clear();
 		Settings now = settings();
 		if (picker == null || now == null || !canUse) {
@@ -767,7 +785,6 @@ public final class AgentsScreen extends Screen {
 		for (int i = 0; i < options.size(); i++) {
 			Option o = options.get(i);
 			Hit row = new Hit(x0 + 3, y, x1 - 3, y + OPTION_H, () -> choose(which, o.id()));
-			if (row.contains(mx, my)) pickerIndex = i;
 			boolean chosen = o.id().equals(current);
 			if (i == pickerIndex) roundRect(g, row.x0(), row.y0(), row.x1(), row.y1(), ROW_SELECTED);
 			g.text(font, o.label(), x0 + 7, y + 3, chosen || i == pickerIndex ? TEXT : TEXT_NAME, false);

@@ -59,8 +59,7 @@ public final class MenuServer {
 			case "stop" -> s.brains.get(a.agent()).stop(who);
 			case "spawn" -> {
 				checkSettings(s, a);
-				AgentBrain brain = s.brains.create(a.agent(), player);
-				brain.configure(a.model(), a.effort(), null);
+				AgentBrain brain = s.brains.create(a.agent(), player, a.model(), a.effort());
 				if (!a.text().isBlank()) s.brains.send(who, player, "in the agents menu", brain, a.text());
 			}
 			case "configure" -> {

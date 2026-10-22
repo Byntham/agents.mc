@@ -49,7 +49,7 @@ public final class MenuPayloads {
 				ByteBufCodecs.stringUtf8(64), Action::agent,
 				ByteBufCodecs.stringUtf8(8192), Action::text,
 				ByteBufCodecs.stringUtf8(128), Action::model,
-				ByteBufCodecs.stringUtf8(16), Action::effort,
+				ByteBufCodecs.stringUtf8(64), Action::effort,
 				Action::new);
 
 		public Action(String action, String agent, String text) {

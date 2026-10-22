@@ -88,12 +88,20 @@ public class AgentsMenuTest implements FabricClientGameTest {
 			pick(ctx, "model", "sonnet", null);
 			waitForBrain(world, "Builder", b -> b.model().equals("sonnet"), 100);
 			waitForFakeLog(ctx, world, "Builder", log -> log.stream().anyMatch(o -> applied(o, "sonnet", "low")), 100);
-			// The keyboard works too: one row down from Low is Medium.
+			// The keyboard works too, with the pointer resting on the list: one row down from Low is Medium.
 			clickGui(ctx, locate(ctx, "effort"));
+			moveTo(ctx, locate(ctx, "option:low"));
+			ctx.waitTicks(2);
 			ctx.getInput().pressKey(InputConstants.KEY_DOWN);
+			ctx.waitTicks(2);
 			ctx.getInput().pressKey(InputConstants.KEY_RETURN);
 			waitForBrain(world, "Builder", b -> b.effort().equals("medium"), 100);
 			waitForFakeLog(ctx, world, "Builder", log -> log.stream().anyMatch(o -> applied(o, "sonnet", "medium")), 100);
+			// Default goes to Claude Code as null, which drops the --model it was launched with.
+			pick(ctx, "model", "", null);
+			waitForFakeLog(ctx, world, "Builder", log -> log.stream().anyMatch(o -> applied(o, "", "medium")), 100);
+			pick(ctx, "model", "sonnet", null);
+			waitForBrain(world, "Builder", b -> b.model().equals("sonnet"), 100);
 			if (fakeLog(world, "Builder").stream().filter(o -> o.has("argv") || o.has("exit")).count() != 1) {
 				throw new AssertionError("Switching models shouldn't restart Builder's Claude Code: " + fakeLog(world, "Builder"));
 			}
@@ -119,11 +127,12 @@ public class AgentsMenuTest implements FabricClientGameTest {
 			ctx.takeScreenshot("05-scout");
 
 			// An older Claude Code refuses to switch while running (the fake does that for names starting
-			// with "Old"): it restarts once idle, and the next message launches with the new settings.
+			// with "Old"): the next message that starts a turn restarts it with the new settings.
 			world.getServer().runCommand("agent spawn OldTimer quick: look around");
 			waitForBrain(world, "OldTimer", b -> b.status() == AgentBrain.Status.IDLE && has(b, ActivityLog.Kind.SAY), 600);
 			world.getServer().runOnServer(server -> AgentsMc.session().brains.get("OldTimer").configure("haiku", "high", "Player0"));
-			waitForFakeLog(ctx, world, "OldTimer", log -> log.stream().anyMatch(o -> o.has("exit")), 200);
+			waitForFakeLog(ctx, world, "OldTimer", log -> log.stream().anyMatch(o -> o.has("control")), 200);
+			ctx.waitTicks(5);
 			ctx.runOnClient(mc -> mc.player.connection.sendChat("@OldTimer quick: look again"));
 			waitForBrain(world, "OldTimer", b -> b.status() == AgentBrain.Status.IDLE && count(b, ActivityLog.Kind.SAY) >= 2, 600);
 			List<JsonObject> oldLaunches = fakeLog(world, "OldTimer").stream().filter(o -> o.has("argv")).toList();
@@ -131,6 +140,14 @@ public class AgentsMenuTest implements FabricClientGameTest {
 			if (oldLaunches.size() != 2 || !flag(relaunch, "--model", "haiku") || !flag(relaunch, "--effort", "high") || !flag(relaunch, "--resume", null)) {
 				throw new AssertionError("OldTimer should have resumed with --model haiku --effort high: " + oldLaunches);
 			}
+
+			// Bringing back an agent whose body is gone (kicked, or despawned over MCP) from the menu keeps its
+			// own model and effort.
+			world.getServer().runOnServer(server -> AgentsMc.session().agents.despawn("OldTimer", "Test"));
+			world.getServer().waitFor(server -> AgentsMc.session().brains.body("OldTimer") == null, 100);
+			ctx.runOnClient(mc -> ClientPlayNetworking.send(new MenuPayloads.Action("spawn", "OldTimer", "", "", "")));
+			world.getServer().waitFor(server -> AgentsMc.session().brains.body("OldTimer") != null, 100);
+			expectSettings(world, "OldTimer", "haiku", "high");
 
 			world.getServer().runCommand("agent stop Builder");
 			waitForBrain(world, "Builder", b -> b.status() == AgentBrain.Status.IDLE, 200);
@@ -308,6 +325,12 @@ public class AgentsMenuTest implements FabricClientGameTest {
 		clickGui(ctx, at[0], at[1]);
 	}
 
+	/** Moves the pointer to menu coordinates. */
+	private static void moveTo(ClientGameTestContext ctx, int[] at) {
+		double perPixel = menuScale(ctx) * ctx.computeOnClient(mc -> (double) mc.getWindow().getScreenWidth() / mc.getWindow().getWidth());
+		ctx.getInput().setCursorPos(at[0] * perPixel + perPixel / 2, at[1] * perPixel + perPixel / 2);
+	}
+
 	/** Clicks at menu coordinates. */
 	private static void clickGui(ClientGameTestContext ctx, int x, int y) {
 		double perPixel = menuScale(ctx) * ctx.computeOnClient(mc -> (double) mc.getWindow().getScreenWidth() / mc.getWindow().getWidth());
@@ -393,7 +416,12 @@ public class AgentsMenuTest implements FabricClientGameTest {
 		JsonObject request = entry.getAsJsonObject("control");
 		if (!request.get("subtype").getAsString().equals("apply_flag_settings")) return false;
 		JsonObject settings = request.getAsJsonObject("settings");
-		return settings.get("model").getAsString().equals(model) && settings.get("effortLevel").getAsString().equals(effort);
+		return value(settings, "model").equals(model) && value(settings, "effortLevel").equals(effort);
+	}
+
+	/** A setting the mod sent, with null (Claude Code's default) as "". */
+	private static String value(JsonObject settings, String key) {
+		return settings.get(key).isJsonNull() ? "" : settings.get(key).getAsString();
 	}
 
 	private static boolean has(AgentBrain b, ActivityLog.Kind kind) {

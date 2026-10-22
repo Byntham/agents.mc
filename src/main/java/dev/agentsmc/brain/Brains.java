@@ -53,6 +53,8 @@ import java.util.regex.Pattern;
 public final class Brains {
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 	private static final Pattern MENTION = Pattern.compile("@([A-Za-z0-9_]{3,16})\\b");
+	/** Claude Code's session ids are UUIDs. */
+	private static final Pattern SESSION_ID = Pattern.compile("[A-Za-z0-9-]{1,64}");
 	/** An idle Claude Code process is closed after this long; the next message resumes the conversation. */
 	private static final long IDLE_CLOSE_MS = 10 * 60_000;
 
@@ -102,7 +104,9 @@ public final class Brains {
 			// World folders get shared, and these reach the claude command line: only take what the menu offers.
 			String model = a.model != null && Models.isModel(s.config, a.model) ? a.model : defaultModel();
 			String effort = a.effort != null && Models.isEffort(s.config, a.effort) ? a.effort : defaultEffort();
-			AgentBrain brain = new AgentBrain(a.name, this, a.sessionId, model, effort);
+			// The session id goes after --resume, so it gets the same check.
+			String session = a.sessionId != null && SESSION_ID.matcher(a.sessionId).matches() ? a.sessionId : null;
+			AgentBrain brain = new AgentBrain(a.name, this, session, model, effort);
 			brains.put(key(a.name), brain);
 			loadLog(brain);
 			try {
@@ -163,6 +167,11 @@ public final class Brains {
 	 * brain back. The body appears in front of {@code near}, or at world spawn.
 	 */
 	public AgentBrain create(String name, ServerPlayer near) {
+		return create(name, near, defaultModel(), defaultEffort());
+	}
+
+	/** As {@link #create(String, ServerPlayer)}. A new agent gets this model and effort; an existing one keeps its own. */
+	public AgentBrain create(String name, ServerPlayer near, String model, String effort) {
 		AgentBrain brain = brains.get(key(name));
 		AgentPlayer body = body(name);
 		if (brain != null && body != null) throw new ToolException(name + " is already here");
@@ -176,7 +185,7 @@ public final class Brains {
 			}
 		}
 		if (brain == null) {
-			brain = new AgentBrain(body.getGameProfile().name(), this, null, defaultModel(), defaultEffort());
+			brain = new AgentBrain(body.getGameProfile().name(), this, null, model, effort);
 			brains.put(key(name), brain);
 		}
 		save();
@@ -359,13 +368,12 @@ public final class Brains {
 		return out;
 	}
 
-	/** The model a new agent starts with: config/agentsmc.json's, "" for Claude Code's default. */
-	String defaultModel() {
-		return s.config.model == null ? "" : s.config.model.trim();
+	private String defaultModel() {
+		return Models.configModel(s.config);
 	}
 
-	String defaultEffort() {
-		return s.config.effort == null ? "" : s.config.effort.trim().toLowerCase(Locale.ROOT);
+	private String defaultEffort() {
+		return Models.configEffort(s.config);
 	}
 
 	// ---- for AgentBrain (any thread) ----
