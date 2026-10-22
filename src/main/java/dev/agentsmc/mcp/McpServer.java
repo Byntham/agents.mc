@@ -67,7 +67,16 @@ public final class McpServer {
 		this.instructions = instructions;
 		this.agentForKey = agentForKey;
 		this.boundInstructions = boundInstructions;
-		this.http = HttpServer.create(new InetSocketAddress(InetAddress.getByName(host), port), 0);
+		HttpServer server;
+		try {
+			server = HttpServer.create(new InetSocketAddress(InetAddress.getByName(host), port), 0);
+		} catch (java.net.BindException e) {
+			// Another game on this computer has the port (a second client, or a test run). Any free port
+			// still serves the agents the mod runs itself; outside clients read the real port from the log.
+			server = HttpServer.create(new InetSocketAddress(InetAddress.getByName(host), 0), 0);
+			AgentsMc.LOGGER.warn("Agents MC: port {} is in use, using {} instead", port, server.getAddress().getPort());
+		}
+		this.http = server;
 		// Blocking tools (wait, screenshot) hold a thread each, so don't cap the pool.
 		this.executor = Executors.newCachedThreadPool(r -> {
 			Thread t = new Thread(r, "agentsmc-mcp");

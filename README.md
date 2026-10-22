@@ -50,7 +50,7 @@ A model takes seconds per decision and a Minecraft tick is 50 ms, so the body do
 - **Senses.** Events are written in the second person with distance, compass direction and where that is relative to the agent's facing: `You heard a creeper hissing, 2m E (ahead).`, `Steve is 20m NE (ahead-left).`, `You took 3 damage from the zombie 2m SW (behind). Health 14/20.` They cover hearing (the server's sounds), damage, hostile mobs appearing and closing in, players walking up or out of range, hunger, light, time of day, lava and drowning.
 - **Waking up.** An idle agent whose body senses something important (damage, a mob coming for it, a task finishing, sunset) gets a message from `World` and decides what to do, at most once every 20 seconds. `wakeOnEvents: false` turns this off.
 
-Survival bodies (`spawn_agent` with `gamemode: survival`, or `/gamemode survival Name`) mine with real tools and place blocks from their inventory with `place_block`. The instant build tools stay creative-style.
+`/agent spawn` gives the agent the game mode of the player who spawned it. A survival or adventure body plays by survival rules: it walks, digs staircases and tunnels when it must (`goto` and `mine` dig on their own), mines with real tools and break times, and gets everything by gathering, crafting (`plan_craft`, `craft`), smelting (`smelt`) and using containers (`container`). Teleport, commands and the instant build tools refuse for such a body; a creative body keeps them.
 
 ## Screenshots
 
