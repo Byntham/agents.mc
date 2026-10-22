@@ -322,7 +322,14 @@ public final class BodyTools {
 					if (!body.hold(stack -> matches(stack, item))) throw new ToolException("No " + item + " in the inventory. " + inventory(a));
 					BlockHitResult hit = body.placementHit(pos, against);
 					a.lookAt(EntityAnchorArgument.Anchor.EYES, hit.getLocation());
-					InteractionResult r = body.useOn(hit);
+					// Sneak while placing, as a player does against a table, chest or furnace: otherwise the click opens it.
+					a.setShiftKeyDown(true);
+					InteractionResult r;
+					try {
+						r = body.useOn(hit);
+					} finally {
+						a.setShiftKeyDown(false);
+					}
 					BlockState now = level.getBlockState(pos);
 					if (now.isAir() || now == there) throw new ToolException("Couldn't place " + item + " at " + pos.toShortString() + " (" + r + ").");
 					return "Placed " + BlockCodec.id(now) + " at " + AgentsMcXyz(pos) + ".";
