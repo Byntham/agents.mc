@@ -253,8 +253,9 @@ So an agent's tool calls act as its own body, and it can't spawn or remove bodie
 
 ### Talking to agents
 
-- **Chat.** A chat message that @mentions an agent (`@Builder ...`) goes to that agent as `<player> (in chat): ...`. Messages agents send with `say` are system messages, which don't fire chat events, so agents can't trigger each other in a loop.
+- **Chat.** A chat message that @mentions an agent (`@Builder ...`) goes to that agent as `<player> (in chat): ...`. Below the text, every message from a player (chat, menu or `/agent spawn`) carries where the sender was and the block they were looking at when they sent it, so "build here" still means the right spot after the agent's startup delay. The menu log shows only the text. Messages agents send with `say` are system messages, which don't fire chat events, so agents can't trigger each other in a loop.
 - **The menu (`client/AgentsScreen`).** While the menu is open, the client asks for the state twice a second (`menu_request`). The server answers with a JSON snapshot (`menu_state`): every agent's status and current activity, plus the selected agent's activity log. Sending, stopping and creating agents go through `menu_action`. All packets are in `net/MenuPayloads`.
+- **Model and effort.** Each agent has its own, picked in the menu (`configure` in `menu_action`) and saved in `agents.json`. They start from the config's `model` and `effort`. The server only accepts values from `brain/Models`: Claude Code takes any model name without an error, and on Windows the command line can pass through cmd.exe. The same check applies to values read back from `agents.json`, since world folders get shared, and so does each saved session id, which goes after `--resume`. A custom `model` or `effort` in the config must be a single token too. A running Claude Code gets the change as an `apply_flag_settings` control request, the one the Agent SDK's `applyFlagSettings` sends. A new model applies from its next API call, even mid-turn. If it answers with an error (an older version), the next message that starts a turn closes it first, and the new launch resumes the conversation with the new `--model` and `--effort` flags. Messages that steer a running turn go to the old process, so a turn is never cut short. Claude Code names the model in each turn's `init` message, and the log shows it when it changes ("Using claude-haiku-5-5").
 - **The log.** `ActivityLog` turns the stream into entries the menu shows: player messages, the model's own text, one line per tool call, `say` messages, errors, and "Finished in 12s".
 
 ### Who can use them
@@ -267,7 +268,7 @@ Agents also read chat through `observe` and `get_events`. Chat from players who 
 
 ### Saving (`<world>/agentsmc/`)
 
-- `agents.json` lists each agent's name, session id, dimension, position and game mode. It is written when agents change, every 5 minutes, and when the world closes.
+- `agents.json` lists each agent's name, session id, model, effort, dimension, position and game mode. It is written when agents change, every 5 minutes, and when the world closes.
 - `agents/<name>/` is the process's working directory. It holds the generated system prompt and MCP config, and `log.json`, the menu history.
 
 When the world opens, every saved agent's body comes back where it was, idle. Its process starts on the next message and resumes the conversation.

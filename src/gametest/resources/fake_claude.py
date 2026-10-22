@@ -2,11 +2,18 @@
 # canned build session, so screenshots don't depend on a real model. A message containing "quick"
 # gets a short finished turn; anything else gets a long turn that keeps the agent working until it
 # is interrupted.
+#
+# It appends its command line and every control request to fake-claude.jsonl in its working directory
+# (the agent's folder), so the test can check what the mod sent. Agents whose name starts with "old"
+# play an older Claude Code that refuses to switch models while running.
+import atexit
 import json
+import os
 import queue
 import sys
 import threading
 import time
+import uuid
 
 inbox = queue.Queue()
 
@@ -20,9 +27,23 @@ def read():
 
 
 threading.Thread(target=read, daemon=True).start()
-session = sys.argv[sys.argv.index("--resume") + 1] if "--resume" in sys.argv else "fake-%d" % int(time.time() * 1000)
+session = sys.argv[sys.argv.index("--resume") + 1] if "--resume" in sys.argv else str(uuid.uuid4())
 pending = []
 counter = [0]
+settings = {
+    "model": sys.argv[sys.argv.index("--model") + 1] if "--model" in sys.argv else None,
+    "effortLevel": sys.argv[sys.argv.index("--effort") + 1] if "--effort" in sys.argv else None,
+}
+old = os.path.basename(os.getcwd()).startswith("old")
+
+
+def record(obj):
+    with open("fake-claude.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps(obj) + "\n")
+
+
+record({"argv": sys.argv[1:]})
+atexit.register(lambda: record({"exit": True}))
 
 
 def out(obj):
@@ -32,6 +53,18 @@ def out(obj):
 
 def assistant(blocks):
     out({"type": "assistant", "message": {"role": "assistant", "content": blocks}, "parent_tool_use_id": None, "session_id": session})
+
+
+def control(m):
+    """Answers a control request that arrives while no turn is waiting to be interrupted, or a settings change."""
+    record({"control": m["request"]})
+    subtype = m["request"].get("subtype")
+    if subtype == "interrupt" or subtype == "apply_flag_settings" and not old:
+        if subtype == "apply_flag_settings":
+            settings.update(m["request"]["settings"])
+        out({"type": "control_response", "response": {"subtype": "success", "request_id": m["request_id"]}})
+    else:
+        out({"type": "control_response", "response": {"subtype": "error", "request_id": m["request_id"], "error": "Unsupported control request"}})
 
 
 def tool(name, args):
@@ -58,6 +91,9 @@ def wait(seconds):
             continue
         if m is None:
             sys.exit(0)
+        if m.get("type") == "control_request" and m["request"].get("subtype") != "interrupt":
+            control(m)
+            continue
         if m.get("type") == "control_request":
             if m["request"].get("cancel_queued"):
                 pending.clear()
@@ -78,10 +114,14 @@ while True:
     msg = pending.pop(0) if pending else inbox.get()
     if msg is None:
         break
+    if msg.get("type") == "control_request":
+        control(msg)
+        continue
     if msg.get("type") != "user":
         continue
     text = msg["message"]["content"]
-    out({"type": "system", "subtype": "init", "session_id": session, "capabilities": ["interrupt_receipt_v1", "interrupt_cancel_queued_v1"]})
+    out({"type": "system", "subtype": "init", "session_id": session, "model": "fake-" + (settings["model"] or "default"),
+         "capabilities": ["interrupt_receipt_v1", "interrupt_cancel_queued_v1"]})
     start = time.time()
     if "quick" in text:
         assistant([{"type": "text", "text": "Scouting north of spawn for a flat site big enough for a watchtower."}])

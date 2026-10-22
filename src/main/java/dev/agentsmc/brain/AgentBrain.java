@@ -2,9 +2,11 @@ package dev.agentsmc.brain;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
+import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
+import com.google.gson.JsonPrimitive;
 import dev.agentsmc.AgentsMc;
 
 import java.io.BufferedReader;
@@ -52,6 +54,7 @@ public final class AgentBrain {
 		return t;
 	});
 	private static final String INTERRUPTED_TOOL = "The user doesn't want to proceed";
+	private static final String SETTINGS_REQUEST = "settings-";
 
 	public final String name;
 	public final ActivityLog log = new ActivityLog();
@@ -74,6 +77,15 @@ public final class AgentBrain {
 
 	// Display and session state: guarded by this.
 	private String sessionId;
+	/** Model and reasoning effort for claude, "" for its default. */
+	private String model, effort;
+	/** The model Claude Code last said it runs, e.g. claude-haiku-5-5. */
+	private String runningModel;
+	/**
+	 * Claude Code refused a settings change, so restart it (resuming the conversation) before the next
+	 * message that starts a turn.
+	 */
+	private boolean relaunch;
 	private Set<String> capabilities = Set.of();
 	private Status status = Status.IDLE;
 	private String activity = "";
@@ -88,10 +100,12 @@ public final class AgentBrain {
 	private long lastWake;
 	private final ArrayDeque<String> stderrTail = new ArrayDeque<>();
 
-	AgentBrain(String name, Brains owner, String sessionId) {
+	AgentBrain(String name, Brains owner, String sessionId, String model, String effort) {
 		this.name = name;
 		this.owner = owner;
 		this.sessionId = sessionId;
+		this.model = model;
+		this.effort = effort;
 		this.io = Executors.newSingleThreadExecutor(r -> {
 			Thread t = new Thread(r, "agentsmc-brain-" + name);
 			t.setDaemon(true);
@@ -116,25 +130,55 @@ public final class AgentBrain {
 		return sessionId;
 	}
 
+	public synchronized String model() {
+		return model;
+	}
+
+	public synchronized String effort() {
+		return effort;
+	}
+
+	/**
+	 * Changes the model and reasoning effort. A running Claude Code switches before its next request,
+	 * even mid-turn. Otherwise the next launch uses them.
+	 *
+	 * @param by the player who changed them, for the log, or null to change them quietly
+	 */
+	public void configure(String model, String effort, String by) {
+		synchronized (this) {
+			if (model.equals(this.model) && effort.equals(this.effort)) return;
+			this.model = model;
+			this.effort = effort;
+			if (by != null) log.add(ActivityLog.Kind.INFO, null, by + " switched to " + Models.describe(owner.config(), model, effort));
+		}
+		owner.sessionChanged();
+		io.execute(this::applySettings);
+	}
+
 	/**
 	 * Delivers a player's message. If the agent is mid-turn, Claude reads it as soon as its current
 	 * tool calls finish (priority "next"); otherwise it starts a turn.
 	 *
-	 * @param via where it came from, as the agent should read it, e.g. "in chat"
+	 * @param via     where it came from, as the agent should read it, e.g. "in chat"
+	 * @param context where the sender was and what they were looking at as they sent it, or null
 	 */
-	public void send(String from, String via, String text) {
+	public void send(String from, String via, String text, String context) {
+		boolean startsTurn;
 		synchronized (this) {
 			log.add(ActivityLog.Kind.USER, from, text);
 			lastSender = from;
 			lastActive = System.currentTimeMillis();
-			if (status == Status.IDLE) {
+			startsTurn = status == Status.IDLE;
+			if (startsTurn) {
 				status = Status.STARTING;
 				activity = "Reading your message";
 				turnStart = lastActive;
 			}
 		}
-		JsonObject msg = userMessage(from + " (" + via + "): " + text, "next");
-		io.execute(() -> writeUserMessage(msg.toString()));
+		String content = from + " (" + via + "): " + text;
+		if (context != null) content += "\n\n[Where " + from + " was when they sent this]\n" + context.strip();
+		JsonObject msg = userMessage(content, "next");
+		io.execute(() -> writeUserMessage(msg.toString(), startsTurn));
 	}
 
 	/**
@@ -163,7 +207,7 @@ public final class AgentBrain {
 			if (status != Status.IDLE || closed) return; // busy again; the next tool result carries the events
 			lastWake = System.currentTimeMillis();
 		}
-		send("World", "your senses", text);
+		send("World", "your senses", text, null);
 	}
 
 	/**
@@ -231,8 +275,17 @@ public final class AgentBrain {
 
 	// ---- io thread ----
 
-	private void writeUserMessage(String line) {
+	/**
+	 * @param startsTurn the agent was idle when this message came, so nothing else is in flight and a
+	 *                   restart can't cut a turn short
+	 */
+	private void writeUserMessage(String line, boolean startsTurn) {
 		if (closed) return;
+		boolean restart;
+		synchronized (this) {
+			restart = startsTurn && relaunch;
+		}
+		if (restart && process != null && process.isAlive()) close();
 		try {
 			if (!ensureProcess()) return;
 			sentThisLaunch.add(line);
@@ -274,9 +327,12 @@ public final class AgentBrain {
 		String url = owner.mcpUrl();
 		if (url == null) throw new LaunchException("The Agents MC tool server isn't running (see the game log), so the agent has no body to control.");
 
-		String resume;
+		String resume, launchModel, launchEffort;
 		synchronized (this) {
 			resume = sessionId;
+			launchModel = model;
+			launchEffort = effort;
+			relaunch = false;
 			resumed = resume != null;
 			initSeen = false;
 			resumeFailed = false;
@@ -294,7 +350,7 @@ public final class AgentBrain {
 			Files.writeString(mcp, mcpConfig(url.replace("{key}", mcpKey)).toString());
 
 			// Relative to the working directory, so cmd.exe never sees characters like & from the world's folder name.
-			List<String> cmd = ClaudeLauncher.command(exe, prompt.getFileName(), mcp.getFileName(), owner.config().model, owner.config().effort, resume);
+			List<String> cmd = ClaudeLauncher.command(exe, prompt.getFileName(), mcp.getFileName(), launchModel, launchEffort, resume);
 			ProcessBuilder pb = new ProcessBuilder(cmd).directory(dir.toFile());
 			// If Minecraft itself was started from a Claude Code session, don't let the agent think it is nested in it.
 			pb.environment().remove("CLAUDECODE");
@@ -368,6 +424,31 @@ public final class AgentBrain {
 		onExit(p);
 	}
 
+	/** Sends the current model and effort to a running Claude Code, the way the Agent SDK's applyFlagSettings does. */
+	private void applySettings() {
+		if (process == null || !process.isAlive()) return; // the next launch passes them on the command line
+		JsonObject settings = new JsonObject();
+		synchronized (this) {
+			settings.add("model", model.isEmpty() ? JsonNull.INSTANCE : new JsonPrimitive(model));
+			settings.add("effortLevel", effort.isEmpty() ? JsonNull.INSTANCE : new JsonPrimitive(effort));
+		}
+		JsonObject request = new JsonObject();
+		request.addProperty("subtype", "apply_flag_settings");
+		request.add("settings", settings);
+		JsonObject msg = new JsonObject();
+		msg.addProperty("type", "control_request");
+		msg.addProperty("request_id", SETTINGS_REQUEST + UUID.randomUUID());
+		msg.add("request", request);
+		try {
+			writeLine(msg.toString());
+		} catch (IOException e) {
+			AgentsMc.LOGGER.warn("Agents MC: could not change {}'s model", name, e);
+			synchronized (this) {
+				relaunch = true;
+			}
+		}
+	}
+
 	/** Kills the process and its children: an npm install on Windows runs claude under cmd.exe. */
 	private static void kill(Process p) {
 		p.descendants().forEach(ProcessHandle::destroyForcibly);
@@ -407,7 +488,7 @@ public final class AgentBrain {
 			}
 			owner.sessionChanged();
 			List<String> replay = List.copyOf(sentThisLaunch);
-			for (String line : replay) writeUserMessage(line);
+			for (String line : replay) writeUserMessage(line, false);
 			return;
 		}
 		int code = p.exitValue();
@@ -488,6 +569,11 @@ public final class AgentBrain {
 					for (JsonElement c : msg.getAsJsonArray("capabilities")) caps.add(c.getAsString());
 				}
 				capabilities = Set.copyOf(caps);
+				String running = str(msg, "model");
+				if (!running.isEmpty() && !running.equals(runningModel)) {
+					runningModel = running;
+					log.add(ActivityLog.Kind.INFO, null, "Using " + running);
+				}
 				working("Thinking");
 			}
 			case "assistant" -> {
@@ -532,6 +618,17 @@ public final class AgentBrain {
 				}
 			}
 			case "result" -> onResult(msg);
+			case "control_response" -> {
+				JsonObject response = msg.has("response") && msg.get("response").isJsonObject() ? msg.getAsJsonObject("response") : new JsonObject();
+				if (!str(response, "request_id").startsWith(SETTINGS_REQUEST)) return;
+				if ("error".equals(str(response, "subtype"))) {
+					AgentsMc.LOGGER.info("Agents MC: {}'s Claude Code can't switch models while running ({}), so it restarts before the next turn",
+							name, str(response, "error"));
+					relaunch = true;
+				} else {
+					relaunch = false; // a later switch went through, so the current settings are in effect
+				}
+			}
 			case "rate_limit_event" -> {
 				JsonObject info = msg.has("rate_limit_info") ? msg.getAsJsonObject("rate_limit_info") : new JsonObject();
 				if ("rejected".equals(str(info, "status"))) {

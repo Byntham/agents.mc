@@ -69,7 +69,7 @@ You need [Claude Code](https://code.claude.com) installed and logged in on the c
 |---|---|
 | `/agent spawn <name> [task]` | Create an agent in front of you, optionally with a first task |
 | `@Name message` in chat | Talk to an agent. A message sent while it's working changes what it's doing. |
-| K | Open the agents menu: every agent, what it's doing now, its history, and a message box. The + button creates an agent. |
+| K | Open the agents menu: every agent, what it's doing now, its history, and a message box. The + button creates an agent. The buttons under the message box pick the agent's model and reasoning effort. |
 | `/agent stop <name>` | Stop what it's doing |
 | `/agent remove <name>` | Remove the agent and its body |
 | `/agent list` | Show every agent and its status |
@@ -129,8 +129,8 @@ Settings live in `config/agentsmc.json`:
 | `allowCommands` | `true` | Whether agents may use `run_command` |
 | `maxBuildBlocks` | `32768` | Most blocks one build call may change |
 | `claudePath` | empty | Path to `claude`. Empty means search PATH and `~/.local/bin`. |
-| `model` | empty | Model for in-game agents, such as `opus`, `sonnet` or `haiku`. Empty means Claude Code's default. |
-| `effort` | empty | `low`, `medium`, `high`, `xhigh` or `max`. Empty means Claude Code's default. |
+| `model` | empty | Model a new in-game agent starts with, such as `opus`, `sonnet` or `haiku`. Empty means Claude Code's default. Each agent's model can be changed in the menu. A full model id here is offered in the menu too. |
+| `effort` | empty | Reasoning effort a new agent starts with: `low`, `medium`, `high`, `xhigh` or `max`. Empty means Claude Code's default. |
 | `whoCanUseAgents` | `ops` | `ops` (operators and the single-player host) or `everyone` |
 
-`./gradlew runClientGameTest` opens a real client, drives the agents menu with a fake `claude`, and saves screenshots to `build/run/clientGameTest/screenshots`. With `AGENTSMC_LIVE=1` set, it also runs an agent with the real Claude Code CLI (model `haiku` unless `AGENTSMC_LIVE_MODEL` says otherwise), closes and reopens the world, and checks that the agent picks up its conversation.
+`./gradlew runClientGameTest` opens a real client, drives the agents menu with a fake `claude`, and saves screenshots to `build/run/clientGameTest/screenshots`. With `AGENTSMC_LIVE=1` set, it also runs an agent with the real Claude Code CLI (model `haiku` unless `AGENTSMC_LIVE_MODEL` says otherwise). That run switches the agent to Sonnet in the menu, closes and reopens the world, switches it back to Haiku, and checks that the agent picks up its conversation and that each turn runs on the chosen model.
