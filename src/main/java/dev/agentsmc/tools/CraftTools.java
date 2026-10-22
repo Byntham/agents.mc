@@ -94,12 +94,13 @@ public final class CraftTools {
 				"Craft an item now from the inventory. Uses the 2x2 inventory grid when the recipe fits, otherwise a crafting table within reach; "
 						+ "if none is in reach but you carry one, it's placed beside you first. Returns what was crafted and the inventory change.",
 				Schema.of().agent(true).str("item", "Item id, e.g. oak_planks, stick, crafting_table, wooden_pickaxe. A group like planks picks one you can make.", true)
-						.integer("count", "How many items you want (default: one craft). 8 oak_planks means two crafts of 4.", false),
+						.integer("count", "How many items you want (default: one craft). 8 oak_planks means two crafts of 4.", false)
+						.bool("place_new", "Place a new crafting table here even if one exists nearby (default false: walk to the existing one)", false),
 				args -> OnServer.call(s.server, () -> {
 					AgentPlayer a = s.agents.get(args.str("agent"));
 					Item item = craftable(a, args.str("item"));
 					int count = Math.max(1, Math.min(256, args.integer("count", 1)));
-					return Crafting.craft(a.body(), item, count);
+					return Crafting.craft(a.body(), item, count, args.bool("place_new", false));
 				}));
 
 		s.tools.register("smelt",
@@ -108,11 +109,12 @@ public final class CraftTools {
 						+ "beside you. When it's done, take the output with container action=take.",
 				Schema.of().agent(true).str("item", "What to cook, e.g. chicken, raw_iron, cobblestone", true)
 						.integer("count", "How many (default: all you have, up to a stack)", false)
-						.str("fuel", "Fuel to use, e.g. coal or planks (default: chosen from the inventory)", false),
+						.str("fuel", "Fuel to use, e.g. coal or planks (default: chosen from the inventory)", false)
+						.bool("place_new", "Place a new furnace here even if one exists nearby (default false: walk to the existing one)", false),
 				args -> OnServer.call(s.server, () -> {
 					AgentPlayer a = s.agents.get(args.str("agent"));
 					Item item = one(args.str("item"));
-					return Crafting.smelt(a.body(), item, args.integer("count", 0), args.str("fuel", ""));
+					return Crafting.smelt(a.body(), item, args.integer("count", 0), args.str("fuel", ""), args.bool("place_new", false));
 				}));
 
 		s.tools.register("container",

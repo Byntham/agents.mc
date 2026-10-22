@@ -57,7 +57,15 @@ public final class Crafting {
 	// ---- crafting -------------------------------------------------------------------------------
 
 	/** Crafts at least {@code count} of {@code item} (whole crafts), at a table if the recipe needs one. */
-	public static String craft(Body body, Item item, int count) {
+	/** " There's a crafting_table at 12 64 -8, 9m NE (ahead)." for the nearest one within 24 blocks, or empty. */
+	static String nearby(Body body, String block) {
+		java.util.List<BlockPos> found = dev.agentsmc.perception.Views.findBlockPositions(body.level(), body.agent.blockPosition(), 24, block, 1);
+		if (found.isEmpty()) return "";
+		BlockPos p = found.getFirst();
+		return " There's a " + block + " at " + Containers.xyz(p) + ", " + dev.agentsmc.perception.Senses.relative(body.agent, net.minecraft.world.phys.Vec3.atCenterOf(p)) + ".";
+	}
+
+	public static String craft(Body body, Item item, int count, boolean placeNew) {
 		AgentPlayer a = body.agent;
 		ServerLevel level = body.level();
 		String name = Recipes.name(item);
@@ -94,8 +102,11 @@ public final class Crafting {
 			BlockPos table = Containers.nearest(body, (p, s) -> s.is(Blocks.CRAFTING_TABLE));
 			if (table == null) {
 				if (!a.getInventory().contains(s -> s.is(Items.CRAFTING_TABLE))) {
-					throw new ToolException(name + " needs a crafting table; craft one (4 planks) or stand next to one.");
+					throw new ToolException(name + " needs a crafting table; craft one (4 planks) or stand next to one." + nearby(body, "crafting_table"));
 				}
+				// Don't litter the world with tables: if there's one a short walk away, use that.
+				String existing = placeNew ? "" : nearby(body, "crafting_table");
+				if (!existing.isEmpty()) throw new ToolException(name + " needs a crafting table." + existing + " goto it and craft there, or pass place_new=true to put one here.");
 				table = Containers.place(body, s -> s.is(Items.CRAFTING_TABLE));
 				if (table == null) throw new ToolException(name + " needs a crafting table, and there's no free spot beside you to place yours. Move to open ground.");
 				placed = "Placed a crafting_table at " + Containers.xyz(table) + ". ";
@@ -146,7 +157,7 @@ public final class Crafting {
 	 * Puts {@code count} of {@code input} and enough fuel into a furnace in reach (placing one from the
 	 * inventory if needed). Returns at once; the furnace cooks on its own.
 	 */
-	public static String smelt(Body body, Item input, int count, String fuelQuery) {
+	public static String smelt(Body body, Item input, int count, String fuelQuery, boolean placeNew) {
 		AgentPlayer a = body.agent;
 		ServerLevel level = body.level();
 		String name = Recipes.name(input);
@@ -170,6 +181,8 @@ public final class Crafting {
 				throw new ToolException("Smelting " + name + " needs a furnace; craft one (8 cobblestone) or stand next to one."
 						+ (other ? " The furnace in reach can't cook it." : ""));
 			}
+			String existing = placeNew ? "" : nearby(body, "furnace");
+			if (!existing.isEmpty()) throw new ToolException("Smelting " + name + " needs a furnace." + existing + " goto it and smelt there, or pass place_new=true to put one here.");
 			Item chosen = station;
 			pos = Containers.place(body, s -> s.is(chosen));
 			if (pos == null) throw new ToolException("No free spot beside you to place the " + Recipes.name(station) + ". Move to open ground.");

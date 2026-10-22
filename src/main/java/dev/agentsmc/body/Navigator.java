@@ -207,7 +207,11 @@ public final class Navigator {
 
 		// Jumping.
 		if (inWater) {
-			if (dy > -0.5 || agent.isUnderWater()) body.jump();
+			// Feet wet but standing on the bottom: walk. Jumping from the floor of shallow water just
+			// bounces the body in and out of it. Hold jump only to stay afloat in deep water, to surface,
+			// or to climb to a higher node.
+			boolean deep = !agent.onGround();
+			if (agent.isUnderWater() || deep && dy > -0.5 || dy > 0.3) body.jump();
 		} else if (node.how() == MoveType.STEP_UP && dy > 0.3 && hd < 1.3) {
 			body.jump();
 		} else if (node.how() == MoveType.JUMP_GAP && hd < 1.7 && agent.onGround()) {
@@ -268,7 +272,9 @@ public final class Navigator {
 		Vec3 stand = Vec3.atBottomCenterOf(path.nodes().get(Math.max(0, index - 1)).pos());
 		if (horizontal(body.agent.position(), stand) > 0.25) body.moveToward(stand, 0.3);
 		BlockHitResult hit = Digger.hitOn(body, block);
-		return digger.tick(block, hit) == Digger.Result.FAILED ? replan() : State.MOVING;
+		Digger.Result dug = digger.tick(block, hit);
+		if (dug == Digger.Result.BROKEN) body.maybeLight();
+		return dug == Digger.Result.FAILED ? replan() : State.MOVING;
 	}
 
 	private State replan() {

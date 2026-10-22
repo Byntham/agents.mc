@@ -24,7 +24,7 @@ public final class Reflexes {
 	private final Body body;
 	private int eatingSlot = -1;
 	private int lastFoodWarn = Integer.MAX_VALUE;
-	private int fleeCooldown, fightCooldown;
+	private int fleeCooldown, fightCooldown, airCooldown;
 
 	Reflexes(Body body) {
 		this.body = body;
@@ -35,10 +35,23 @@ public final class Reflexes {
 		if (!agent.isAlive() || agent.isCreative() || agent.isSpectator()) return;
 		if (fleeCooldown > 0) fleeCooldown--;
 		if (fightCooldown > 0) fightCooldown--;
+		if (airCooldown > 0) airCooldown--;
+		breathe();
 
 		if (fleeCreepers) flee();
 		if (fightBack) fight();
 		if (autoEat) eat();
+	}
+
+	/** Underwater and short of air: swim up, whatever else is going on. */
+	private void breathe() {
+		var agent = body.agent;
+		if (!agent.isUnderWater() || agent.getAirSupply() > 150) return;
+		body.jump();
+		if (airCooldown == 0) {
+			airCooldown = 200;
+			body.event("reflex", "Short of air: surfacing before going on.", EventLog.WAKE);
+		}
 	}
 
 	private void flee() {

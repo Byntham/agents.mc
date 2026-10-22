@@ -451,6 +451,40 @@ public final class Body {
 		agent.swing(InteractionHand.MAIN_HAND, agent.getMainHandItem().getAttackAnimation(), true);
 	}
 
+	// ---- light ----------------------------------------------------------------------------------
+
+	private BlockPos lastTorch;
+
+	/**
+	 * Puts a torch down where it's dark, a few blocks apart, as a player does while digging: tunnels
+	 * stay lit, mobs don't spawn in them, and humans can follow them. Needs torches in the inventory.
+	 */
+	public void maybeLight() {
+		BlockPos feet = agent.blockPosition();
+		if (lastTorch != null && lastTorch.distSqr(feet) < 36) return;
+		if (agent.level().getMaxLocalRawBrightness(feet) >= 8) return;
+		if (!agent.getInventory().contains(s -> s.is(net.minecraft.world.item.Items.TORCH))) return;
+		int held = agent.getInventory().getSelectedSlot();
+		for (Direction d : Direction.Plane.HORIZONTAL) {
+			BlockPos pos = feet.relative(d);
+			BlockState at = agent.level().getBlockState(pos);
+			if (!at.isAir() || !agent.level().getBlockState(pos.below()).isFaceSturdy(agent.level(), pos.below(), Direction.UP)) continue;
+			if (!hold(s -> s.is(net.minecraft.world.item.Items.TORCH))) return;
+			agent.setShiftKeyDown(true);
+			try {
+				useOn(placementHit(pos, pos.below()));
+			} finally {
+				agent.setShiftKeyDown(false);
+			}
+			if (agent.level().getBlockState(pos).is(net.minecraft.world.level.block.Blocks.TORCH)) {
+				lastTorch = pos;
+				hold(held);
+				return;
+			}
+		}
+		hold(held);
+	}
+
 	// ---- events ---------------------------------------------------------------------------------
 
 	/** Records something this body noticed or did, for this agent only. */
