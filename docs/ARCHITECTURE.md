@@ -270,6 +270,8 @@ When the world opens, every saved agent's body comes back where it was, idle. It
 
 `src/gametest` holds a Fabric client game test. It opens a real client, creates agents through the menu, and saves screenshots. It uses `fake_claude.py`, which speaks the stream-json protocol, so the menu can be checked without a model. With `AGENTSMC_LIVE=1` it also runs the real CLI end to end: build, close the world, reopen it, and continue the conversation.
 
+`BodyTest` drives a survival body through an obstacle course over MCP (walk over a step and through a gap, chop logs, kill a zombie, follow the host, back away from a creeper), `TerrainTest` does a long walk and a night with monsters in a normally generated world, and `LiveBodyTest` plays the same kind of session with a real Claude Code agent (`AGENTSMC_LIVE_MODEL`, `AGENTSMC_LIVE_EFFORT`). `AGENTSMC_ONLY=body|terrain|live|screenshot|menu` runs one of them. During these the host's camera tracks the agent and `Narrator` prints what the agent senses and calls into the chat, so a screen recording of the run is a demo.
+
 `ScreenshotTest` calls the screenshot tool over MCP from several cameras and saves the pictures as `agent-*.jpg` next to the other screenshots. It checks most of them for blocks it placed: a gold tower in front of the host, and a red wall 48 blocks behind them that the host's game hasn't built. One shot is taken with the host blinded. Afterwards it checks that the window and render target are back to their size and that the host's view looks the same as before.
 
 ## Roadmap
