@@ -185,7 +185,20 @@ public final class Navigator {
 			index++;
 			bestDist = Double.MAX_VALUE;
 			noProgress = 0;
-			if (index >= path.nodes().size()) return toward(goal, tolerance);
+			if (index >= path.nodes().size()) {
+				// Stepped off the end of the path while already standing in its last node.
+				if (path.reachesGoal()) {
+					body.moveToward(goal, 0.6);
+					return arrived(goal, tol + 0.5) ? State.ARRIVED : State.MOVING;
+				}
+				// A partial path: plan the next leg next tick, not now. Planning again from the same
+				// spot gives the same one-step path, and recursing on it overflowed the stack.
+				boolean wentNowhere = path.nodes().size() <= 2;
+				path = null;
+				cooldown = REPLAN_COOLDOWN;
+				if (wentNowhere && ++replans > MAX_REPLANS) return State.STUCK;
+				return State.MOVING;
+			}
 			node = path.nodes().get(index);
 			target = Vec3.atBottomCenterOf(node.pos());
 			hd = horizontal(agent.position(), target);
