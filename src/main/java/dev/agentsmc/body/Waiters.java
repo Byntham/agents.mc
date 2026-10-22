@@ -15,7 +15,7 @@ import java.util.concurrent.TimeoutException;
  * soon as it lands.
  */
 public final class Waiters {
-	private record Waiter(String agent, int minSalience, boolean intentsOnly, boolean includeRestricted, CompletableFuture<EventLog.Event> future) {
+	public record Waiter(String agent, int minSalience, boolean intentsOnly, boolean includeRestricted, CompletableFuture<EventLog.Event> future) {
 	}
 
 	private final List<Waiter> waiting = new CopyOnWriteArrayList<>();
@@ -34,8 +34,22 @@ public final class Waiters {
 	 * Blocks until a matching event arrives or {@code ms} pass. Returns the event, or null on timeout.
 	 */
 	public EventLog.Event await(String agent, int minSalience, boolean intentsOnly, boolean includeRestricted, long ms) throws InterruptedException {
+		return await(register(agent, minSalience, intentsOnly, includeRestricted), ms);
+	}
+
+	/**
+	 * Starts listening now, so an event that lands before the caller gets round to blocking is not
+	 * missed. Call on the server thread, in the same task that checks for events already pending,
+	 * then {@link #await(Waiter, long)} off it.
+	 */
+	public Waiter register(String agent, int minSalience, boolean intentsOnly, boolean includeRestricted) {
 		Waiter w = new Waiter(agent, minSalience, intentsOnly, includeRestricted, new CompletableFuture<>());
 		waiting.add(w);
+		return w;
+	}
+
+	/** Blocks on a registered waiter until its event arrives or {@code ms} pass, then unregisters it. */
+	public EventLog.Event await(Waiter w, long ms) throws InterruptedException {
 		try {
 			return w.future.get(ms, TimeUnit.MILLISECONDS);
 		} catch (TimeoutException e) {
@@ -45,6 +59,11 @@ public final class Waiters {
 		} finally {
 			waiting.remove(w);
 		}
+	}
+
+	/** Stops listening without waiting. */
+	public void unregister(Waiter w) {
+		waiting.remove(w);
 	}
 
 	/** Wakes everyone, e.g. when the world closes. */

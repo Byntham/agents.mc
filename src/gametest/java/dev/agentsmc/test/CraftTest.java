@@ -108,8 +108,11 @@ public class CraftTest implements FabricClientGameTest {
 			// ---- a chest the host sets down: put and take ----
 			BlockPos chest = world.getServer().computeOnServer(server -> {
 				BlockPos feet = agent(server).blockPosition();
-				for (BlockPos p : new BlockPos[] {feet.north(2), feet.south(2), feet.east(2), feet.west(2), feet.north(2).east(), feet.south(2).west()}) {
-					if (server.overworld().getBlockState(p).isAir() && server.overworld().getBlockState(p.above()).isAir()) return p;
+				// Two blocks away with the block in between clear, so the agent can see it (a chest
+				// behind the furnace it just used must not count as reachable).
+				for (BlockPos[] c : new BlockPos[][] {{feet.north(2), feet.north()}, {feet.south(2), feet.south()}, {feet.east(2), feet.east()}, {feet.west(2), feet.west()}}) {
+					var level = server.overworld();
+					if (level.getBlockState(c[0]).isAir() && level.getBlockState(c[0].above()).isAir() && level.getBlockState(c[1]).isAir() && level.getBlockState(c[1].above()).isAir()) return c[0];
 				}
 				throw new AssertionError("No room for a chest near the agent");
 			});

@@ -30,17 +30,22 @@ public final class Reflexes {
 		this.body = body;
 	}
 
-	void tick() {
+	/**
+	 * Runs the reflexes for this tick. Returns true when one of them has taken over the body's
+	 * movement (fleeing a creeper), so the current intent must not steer this tick.
+	 */
+	boolean tick() {
 		var agent = body.agent;
-		if (!agent.isAlive() || agent.isCreative() || agent.isSpectator()) return;
+		if (!agent.isAlive() || agent.isCreative() || agent.isSpectator()) return false;
 		if (fleeCooldown > 0) fleeCooldown--;
 		if (fightCooldown > 0) fightCooldown--;
 		if (airCooldown > 0) airCooldown--;
 		breathe();
 
-		if (fleeCreepers) flee();
+		boolean fleeing = fleeCreepers && flee();
 		if (fightBack) fight();
 		if (autoEat) eat();
+		return fleeing;
 	}
 
 	/** Underwater and short of air: swim up, whatever else is going on. */
@@ -54,9 +59,10 @@ public final class Reflexes {
 		}
 	}
 
-	private void flee() {
+	/** Backs away from a creeper about to go off. Returns true while doing so. */
+	private boolean flee() {
 		List<Creeper> creepers = body.level().getEntitiesOfClass(Creeper.class, body.agent.getBoundingBox().inflate(5), c -> c.getSwellDir() > 0 || c.isIgnited());
-		if (creepers.isEmpty()) return;
+		if (creepers.isEmpty()) return false;
 		Creeper c = creepers.getFirst();
 		body.sprint(true);
 		body.moveAwayFrom(c.position(), 1.0);
@@ -65,6 +71,7 @@ public final class Reflexes {
 			fleeCooldown = 60;
 			body.event("reflex", String.format(Locale.ROOT, "A creeper is about to explode %s. Backing away.", Senses.relative(body.agent, c.position())), EventLog.URGENT);
 		}
+		return true;
 	}
 
 	private void fight() {

@@ -225,7 +225,13 @@ public final class Navigator {
 			// bounces the body in and out of it. Hold jump only to stay afloat in deep water, to surface,
 			// or to climb to a higher node.
 			boolean deep = !agent.onGround();
-			if (agent.isUnderWater() || deep && dy > -0.5 || dy > 0.3) body.jump();
+			if (dy < -0.5 && !agent.onGround()) {
+				// The next node is below: let the body sink, and look down at it so a sprint-swim
+				// goes that way too. The breathe reflex still pulls up when air runs short.
+				body.face(target);
+			} else if (agent.isUnderWater() || deep && dy > -0.5 || dy > 0.3) {
+				body.jump();
+			}
 		} else if (node.how() == MoveType.STEP_UP && dy > 0.3 && hd < 1.3) {
 			body.jump();
 		} else if (node.how() == MoveType.JUMP_GAP && hd < 1.7 && agent.onGround()) {

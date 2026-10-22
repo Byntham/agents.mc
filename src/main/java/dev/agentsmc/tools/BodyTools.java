@@ -11,6 +11,7 @@ import dev.agentsmc.body.GotoIntent;
 import dev.agentsmc.body.Intent;
 import dev.agentsmc.body.MineIntent;
 import dev.agentsmc.body.Navigator;
+import dev.agentsmc.body.Waiters;
 import dev.agentsmc.mcp.Schema;
 import dev.agentsmc.mcp.ToolException;
 import dev.agentsmc.perception.BlockCodec;
@@ -212,24 +213,27 @@ public final class BodyTools {
 					int seconds = Math.max(1, Math.min(MAX_WAIT_S, args.integer("seconds", 30)));
 					boolean intentsOnly = "intent".equals(args.str("until", "any"));
 					int min = Math.max(0, Math.min(3, args.integer("min_salience", 1)));
-					boolean managed = managed(s, agent);
-					// Already have something unread that qualifies? Don't wait at all.
-					EventLog.Event pending = OnServer.call(s.server, () -> {
+					// Register the waiter and look for something already unread in one server-thread task:
+					// events are posted on that thread, so none can land in between and wake nobody.
+					record Armed(EventLog.Event pending, Waiters.Waiter waiter) {
+					}
+					Armed armed = OnServer.call(s.server, () -> {
+						boolean managed = managed(s, agent);
+						Waiters.Waiter w = s.waiters.register(agent, min, intentsOnly, !managed);
 						AgentState st = s.agents.state(agent);
 						for (EventLog.Event e : s.events.since(st.eventCursor, agent, 100, !managed).events()) {
-							if (e.salience() >= min && (!intentsOnly || e.type().equals("intent"))) return e;
+							if (e.salience() >= min && (!intentsOnly || e.type().equals("intent"))) return new Armed(e, w);
 						}
-						return null;
+						return new Armed(null, w);
 					});
 					long start = System.currentTimeMillis();
-					EventLog.Event woke = pending;
-					if (woke == null) {
-						try {
-							woke = s.waiters.await(agent, min, intentsOnly, !managed, seconds * 1000L);
-						} catch (InterruptedException e) {
-							Thread.currentThread().interrupt();
-							throw new ToolException("Interrupted while waiting");
-						}
+					EventLog.Event woke = armed.pending();
+					try {
+						if (woke == null) woke = s.waiters.await(armed.waiter(), seconds * 1000L);
+						else s.waiters.unregister(armed.waiter());
+					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+						throw new ToolException("Interrupted while waiting");
 					}
 					double waited = (System.currentTimeMillis() - start) / 1000.0;
 					String reason = woke == null ? String.format(Locale.ROOT, "Nothing notable in %.0fs.", waited)
@@ -358,11 +362,7 @@ public final class BodyTools {
 					if (before.isAir()) throw new ToolException("Nothing at " + pos.toShortString());
 					a.lookAt(EntityAnchorArgument.Anchor.EYES, Vec3.atCenterOf(pos));
 					BlockHitResult hit = body.sight(pos);
-					if (hit == null) {
-						Vec3 eye = a.getEyePosition(), c = Vec3.atCenterOf(pos);
-						Direction face = Direction.getApproximateNearest(eye.x - c.x, eye.y - c.y, eye.z - c.z);
-						hit = body.placementHit(pos.relative(face), pos);
-					}
+					if (hit == null) throw new ToolException("Can't see " + BlockCodec.id(before) + " at " + pos.toShortString() + " from here: something is in the way. Move for a clear view of it.");
 					InteractionResult r = body.useOn(hit);
 					BlockState after = a.level().getBlockState(pos);
 					return "Used " + BlockCodec.id(before) + " (" + r + ")" + (after != before ? "; it's now " + BlockCodec.id(after) : "") + ".";

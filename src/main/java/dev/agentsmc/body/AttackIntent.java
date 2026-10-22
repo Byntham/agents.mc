@@ -82,6 +82,11 @@ public final class AttackIntent extends Intent {
 		}
 		// In range: back off half a step if we're inside them, and swing when the cooldown allows.
 		if (d < 1.0) body.moveAwayFrom(target.position(), 0.5);
+		if (!body.agent.hasLineOfSight(target)) {
+			// Within reach but behind a wall or a corner: no swinging through blocks. Step toward it.
+			body.moveToward(target.position(), 0.6);
+			return;
+		}
 		if (body.agent.getAttackStrengthScale(0.5f) >= 1f && body.facing(target.getEyePosition(), 60)) {
 			body.agent.attack(target);
 			body.swingArm();

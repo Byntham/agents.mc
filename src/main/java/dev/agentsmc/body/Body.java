@@ -84,8 +84,10 @@ public final class Body {
 		}
 
 		senses.tick();
-		reflexes.tick();
-		if (current != null) {
+		// A reflex that moves the body (fleeing a creeper) owns this tick's movement: an intent
+		// steering toward its goal would otherwise cancel the step away.
+		boolean reflexMoving = reflexes.tick();
+		if (current != null && !reflexMoving) {
 			current.run(this);
 			if (current.finished()) finish(current);
 		}
@@ -435,8 +437,18 @@ public final class Body {
 		return new BlockHitResult(loc, face, against, false);
 	}
 
+	/**
+	 * Whether the server lets this player touch a block there: spawn protection and the world border.
+	 * A client's packets go through this check; the body's calls into the game mode skip it, so it is
+	 * made here.
+	 */
+	public boolean mayInteract(BlockPos pos) {
+		return agent.level().mayInteract(agent, pos);
+	}
+
 	/** Right-clicks a block with what is in the main hand. */
 	public InteractionResult useOn(BlockHitResult hit) {
+		if (!mayInteract(hit.getBlockPos())) return InteractionResult.FAIL;
 		ItemStack stack = agent.getMainHandItem();
 		InteractionResult result = agent.gameMode.useItemOn(agent, agent.level(), stack, InteractionHand.MAIN_HAND, hit);
 		if (result.consumesAction()) agent.swing(InteractionHand.MAIN_HAND, stack.getInteractAnimation(), true);
@@ -445,6 +457,7 @@ public final class Body {
 
 	/** Starts, continues or ends breaking a block, like holding or releasing the mouse button. */
 	public void breakAction(BlockPos pos, Direction face, ServerboundPlayerActionPacket.Action action) {
+		if (action == ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK && !mayInteract(pos)) return;
 		agent.gameMode.handleBlockBreakAction(pos, action, face, agent.level().getMaxY() + 1, 0);
 	}
 

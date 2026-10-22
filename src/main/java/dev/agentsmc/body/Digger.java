@@ -37,7 +37,7 @@ final class Digger {
 	private boolean breaking;
 	/** The agent's tick count when the next block may be started. */
 	private int readyAt;
-	private int held, broken;
+	private int held, broken, noGain, stopTries;
 
 	Digger(Body body) {
 		this.body = body;
@@ -63,6 +63,7 @@ final class Digger {
 		body.face(hit.getLocation());
 		if (!breaking) {
 			if (body.agent.tickCount < readyAt) return Result.BUSY;
+			if (!body.mayInteract(pos) || body.agent.blockActionRestricted(level, pos, body.agent.gameMode.getGameModeForPlayer())) return Result.FAILED;
 			if (!body.facing(hit.getLocation(), 15)) return Result.BUSY; // finish turning first, like a player would
 			face = hit.getDirection();
 			body.holdToolFor(state);
@@ -71,14 +72,31 @@ final class Digger {
 			breaking = true;
 			progress = 0;
 			held = 0;
+			noGain = 0;
+			stopTries = 0;
 			if (!level.getBlockState(pos).is(state.getBlock())) return finished(); // creative mode breaks instantly
 		}
-		progress += state.getDestroyProgress(body.agent, level, pos);
+		float gain = state.getDestroyProgress(body.agent, level, pos);
+		if (gain <= 0) {
+			// Nothing happens however long we hold: the block can't be broken by this player here.
+			if (++noGain > 20) {
+				abort();
+				return Result.FAILED;
+			}
+		} else {
+			noGain = 0;
+		}
+		progress += gain;
 		if (held++ % 4 == 0) body.swingArm();
 		if (progress >= 1f) {
 			body.breakAction(pos, face, ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK);
 			if (!level.getBlockState(pos).is(state.getBlock())) return finished();
-			// The server's own progress estimate disagreed (e.g. the tool changed). Keep holding.
+			// The server's own progress estimate disagreed (e.g. the tool changed). Keep holding a
+			// while longer, but not forever: the server may be refusing the break outright.
+			if (++stopTries > 40) {
+				abort();
+				return Result.FAILED;
+			}
 			progress = 0.9f;
 		}
 		return Result.BUSY;

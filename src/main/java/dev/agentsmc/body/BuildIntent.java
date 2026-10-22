@@ -39,7 +39,7 @@ public final class BuildIntent extends Intent {
 	private final Digger digger;
 	private final int total;
 	private Job current;
-	private int placed, broken, approachTicks, stuck;
+	private int placed, broken, approachTicks, stuck, placeFails;
 	private final Map<String, Integer> missing = new LinkedHashMap<>();
 	private final List<String> failed = new ArrayList<>();
 	private int sinceProgress;
@@ -155,7 +155,14 @@ public final class BuildIntent extends Intent {
 		}
 		BlockState now = body.level().getBlockState(pos);
 		if (now.isAir() || now == have) {
-			if (++stuck > 3) skip(body, "placing failed (" + r + ")");
+			if (++placeFails > 3) skip(body, "placing failed (" + r + ")");
+			return;
+		}
+		if (!current.spec().matches(now)) {
+			// Placed, but the game chose a different state (a log's axis, stairs' facing) from where it
+			// was placed from. Say so rather than count it as done; the model can fix it or accept it.
+			if (failed.size() < 10) failed.add(pos.toShortString() + ": placed " + BlockCodec.id(now) + " instead of " + BlockCodec.id(want));
+			finish(body, true);
 			return;
 		}
 		placed++;
@@ -165,6 +172,7 @@ public final class BuildIntent extends Intent {
 	private void finish(Body body, boolean progressed) {
 		current = null;
 		stuck = 0;
+		placeFails = 0;
 		if (progressed) sinceProgress = 0;
 	}
 
@@ -175,6 +183,7 @@ public final class BuildIntent extends Intent {
 		current = null;
 		approachTicks = 0;
 		stuck = 0;
+		placeFails = 0;
 	}
 
 	private boolean pickNext(Body body) {

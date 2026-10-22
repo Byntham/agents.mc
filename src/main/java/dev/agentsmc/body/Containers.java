@@ -1,6 +1,7 @@
 package dev.agentsmc.body;
 
 import dev.agentsmc.agent.AgentPlayer;
+import dev.agentsmc.mcp.ToolException;
 import dev.agentsmc.perception.BlockCodec;
 import net.minecraft.commands.arguments.EntityAnchorArgument;
 import net.minecraft.core.BlockPos;
@@ -116,8 +117,8 @@ public final class Containers {
 		a.lookAt(EntityAnchorArgument.Anchor.EYES, Vec3.atCenterOf(pos));
 		BlockHitResult hit = body.sight(pos);
 		if (hit == null) {
-			Vec3 eye = a.getEyePosition(), c = Vec3.atCenterOf(pos);
-			hit = body.placementHit(pos.relative(Direction.getApproximateNearest(eye.x - c.x, eye.y - c.y, eye.z - c.z)), pos);
+			// A player can't click a chest through a wall; neither can the body.
+			throw new ToolException("Can't see the " + blockName(a.level().getBlockState(pos)) + " at " + xyz(pos) + " from here: something is in the way. Move for a clear view of it.");
 		}
 		// Sneaking would place the held item against the block instead of opening it.
 		if (a.isShiftKeyDown()) a.setShiftKeyDown(false);

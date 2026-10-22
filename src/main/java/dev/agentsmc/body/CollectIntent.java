@@ -16,6 +16,7 @@ public final class CollectIntent extends Intent {
 	private final MineIntent.Inventory before;
 	private int targetId = -1;
 	private int idle;
+	private final java.util.Set<Integer> unreachable = new java.util.HashSet<>();
 
 	public CollectIntent(Body body, Predicate<ItemEntity> match, String what, double radius) {
 		this.match = match;
@@ -42,6 +43,7 @@ public final class CollectIntent extends Intent {
 			List<ItemEntity> items = body.level().getEntitiesOfClass(ItemEntity.class, body.agent.getBoundingBox().inflate(radius), match);
 			double best = Double.MAX_VALUE;
 			for (ItemEntity e : items) {
+				if (unreachable.contains(e.getId())) continue; // tried that one; don't path to it again every tick
 				double d = e.distanceToSqr(body.agent);
 				if (d < best) {
 					best = d;
@@ -50,7 +52,9 @@ public final class CollectIntent extends Intent {
 			}
 			if (target == null) {
 				String gained = before.gained(body);
-				done(gained.isEmpty() ? "nothing to pick up" : "picked up " + gained);
+				String got = gained.isEmpty() ? "picked up nothing" : "picked up " + gained;
+				if (unreachable.isEmpty()) done(gained.isEmpty() ? "nothing to pick up" : "picked up " + gained);
+				else fail(String.format(Locale.ROOT, "couldn't reach %d %s; %s", unreachable.size(), what, got));
 				return;
 			}
 			targetId = target.getId();
@@ -60,10 +64,8 @@ public final class CollectIntent extends Intent {
 		body.face(target.position());
 		Navigator.State s = nav.toward(target.position(), 0.8);
 		if (s == Navigator.State.UNREACHABLE || s == Navigator.State.STUCK || ++idle > 20 * 20) {
+			unreachable.add(targetId);
 			targetId = -1; // try another
-			if (idle > 20 * 20) {
-				fail(String.format(Locale.ROOT, "couldn't reach the %s; %s", what, before.gained(body).isEmpty() ? "picked up nothing" : "picked up " + before.gained(body)));
-			}
 		}
 	}
 
