@@ -20,9 +20,12 @@ public final class Models {
 	public record Option(String id, String label) {
 	}
 
-	/** What a value from the config may look like, e.g. claude-opus-5-5 or opus[1m]. Nothing cmd.exe treats as syntax. */
 	private static final Set<String> warned = ConcurrentHashMap.newKeySet();
-	private static final Pattern TOKEN = Pattern.compile("[A-Za-z0-9._:\\[\\]-]{1,64}");
+	/**
+	 * What a value from the config may look like, e.g. claude-opus-5-5 or opus[1m]. Nothing cmd.exe
+	 * treats as syntax, and no leading - that claude would read as an option.
+	 */
+	private static final Pattern TOKEN = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._:\\[\\]-]{0,63}");
 
 	// Aliases, so each always means the newest model of that family.
 	private static final List<Option> MODELS = List.of(
