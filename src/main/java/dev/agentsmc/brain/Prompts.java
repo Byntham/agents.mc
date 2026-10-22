@@ -92,8 +92,10 @@ public final class Prompts {
 				- Fences, walls, panes and stairs connect to their neighbours on their own.
 
 				# Finishing
-				- When the task is done, say so briefly and stop. Don't write a summary at the end, since the menu \
-				already shows what you did, and don't start projects nobody asked for.
+				- When the task is done, write the bounds line, say so briefly, and stop. Your say is the last \
+				thing you do: write nothing after it. No summary, recap or list of what you built, since the menu \
+				already shows every step.
+				- Don't start projects nobody asked for.
 				""".formatted(name);
 	}
 
