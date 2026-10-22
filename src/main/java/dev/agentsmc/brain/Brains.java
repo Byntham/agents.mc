@@ -54,6 +54,8 @@ import java.util.regex.Pattern;
 public final class Brains {
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 	private static final Pattern MENTION = Pattern.compile("@([A-Za-z0-9_]{3,16})\\b");
+	/** Claude Code's session ids are UUIDs. Anything else, like "--help", could pass as another option after --resume. */
+	private static final Pattern SESSION_ID = Pattern.compile("\\p{XDigit}{8}(-\\p{XDigit}{4}){3}-\\p{XDigit}{12}");
 	/** An idle Claude Code process is closed after this long; the next message resumes the conversation. */
 	private static final long IDLE_CLOSE_MS = 10 * 60_000;
 
@@ -61,6 +63,8 @@ public final class Brains {
 	static final class Saved {
 		String name;
 		String sessionId;
+		/** Null in worlds saved before agents had their own, or not on offer here: use the config's. */
+		String model, effort;
 		String dimension = "minecraft:overworld";
 		double x, y, z;
 		float yaw;
@@ -98,7 +102,12 @@ public final class Brains {
 		for (Saved a : list) {
 			if (a == null || a.name == null) continue;
 			saved.put(key(a.name), a);
-			AgentBrain brain = new AgentBrain(a.name, this, a.sessionId);
+			// World folders get shared, and these reach the claude command line: only take what the menu offers.
+			String model = a.model != null && Models.isModel(s.config, a.model) ? a.model : defaultModel();
+			String effort = a.effort != null && Models.isEffort(s.config, a.effort) ? a.effort : defaultEffort();
+			// The session id goes after --resume, so it gets the same check.
+			String session = a.sessionId != null && SESSION_ID.matcher(a.sessionId).matches() ? a.sessionId : null;
+			AgentBrain brain = new AgentBrain(a.name, this, session, model, effort);
 			brains.put(key(a.name), brain);
 			loadLog(brain);
 			try {
@@ -159,6 +168,11 @@ public final class Brains {
 	 * brain back. The body appears in front of {@code near}, or at world spawn.
 	 */
 	public AgentBrain create(String name, ServerPlayer near) {
+		return create(name, near, defaultModel(), defaultEffort());
+	}
+
+	/** As {@link #create(String, ServerPlayer)}. A new agent gets this model and effort; an existing one keeps its own. */
+	public AgentBrain create(String name, ServerPlayer near, String model, String effort) {
 		AgentBrain brain = brains.get(key(name));
 		AgentPlayer body = body(name);
 		if (brain != null && body != null) throw new ToolException(name + " is already here");
@@ -172,7 +186,7 @@ public final class Brains {
 			}
 		}
 		if (brain == null) {
-			brain = new AgentBrain(body.getGameProfile().name(), this, null);
+			brain = new AgentBrain(body.getGameProfile().name(), this, null, model, effort);
 			brains.put(key(name), brain);
 		}
 		save();
@@ -289,8 +303,11 @@ public final class Brains {
 		root.addProperty("now", System.currentTimeMillis());
 		boolean full = canUse(viewer);
 		root.addProperty("canUse", full);
-		root.addProperty("model", blankToDefault(s.config.model));
-		root.addProperty("effort", blankToDefault(s.config.effort));
+		// What the model and effort pickers offer, and what a new agent starts with.
+		root.add("models", options(Models.models(s.config)));
+		root.add("efforts", options(Models.efforts(s.config)));
+		root.addProperty("model", defaultModel());
+		root.addProperty("effort", defaultEffort());
 		JsonArray agents = new JsonArray();
 		List<AgentBrain> sorted = new ArrayList<>(brains.values());
 		sorted.sort(Comparator.comparingLong(AgentBrain::lastActive).reversed());
@@ -301,6 +318,8 @@ public final class Brains {
 			a.addProperty("activity", b.activity());
 			a.addProperty("last", b.lastActive());
 			a.addProperty("body", body(b.name) != null);
+			a.addProperty("model", b.model());
+			a.addProperty("effort", b.effort());
 			ActivityLog.Entry last = b.log.last();
 			a.addProperty("preview", last == null || !full ? "" : preview(last));
 			agents.add(a);
@@ -341,8 +360,23 @@ public final class Brains {
 		};
 	}
 
-	private static String blankToDefault(String v) {
-		return v == null || v.isBlank() ? "default" : v.trim();
+	private static JsonArray options(List<Models.Option> options) {
+		JsonArray out = new JsonArray();
+		for (Models.Option o : options) {
+			JsonObject j = new JsonObject();
+			j.addProperty("id", o.id());
+			j.addProperty("label", o.label());
+			out.add(j);
+		}
+		return out;
+	}
+
+	private String defaultModel() {
+		return Models.configModel(s.config);
+	}
+
+	private String defaultEffort() {
+		return Models.configEffort(s.config);
 	}
 
 	// ---- for AgentBrain (any thread) ----
@@ -407,6 +441,8 @@ public final class Brains {
 			Saved a = saved.computeIfAbsent(key(b.name), k -> new Saved());
 			a.name = b.name;
 			a.sessionId = b.sessionId();
+			a.model = b.model();
+			a.effort = b.effort();
 			AgentPlayer body = body(b.name);
 			if (body != null) {
 				a.dimension = body.level().dimension().identifier().toString();

@@ -9,6 +9,7 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.CharacterEvent;
 import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
@@ -16,7 +17,10 @@ import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.util.Mth;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.function.IntConsumer;
 
 /**
@@ -51,10 +55,12 @@ public final class AgentsScreen extends Screen {
 	private static final int FIELD = 0xFF18181D;
 	private static final int FIELD_BORDER = 0xFF35353F;
 	private static final int FIELD_FOCUSED = 0xFF4A4A56;
+	private static final int CLAUDE = 0xFFD97757;
 	private static final int ROW_H = 30;
+	private static final int OPTION_H = 14;
 	private static final int HEADER_H = 24;
 
-	private record Agent(String name, String status, String activity, long last, boolean body, String preview) {
+	private record Agent(String name, String status, String activity, long last, boolean body, String preview, String model, String effort) {
 		boolean busy() {
 			return !status.equals("idle");
 		}
@@ -73,12 +79,39 @@ public final class AgentsScreen extends Screen {
 		}
 	}
 
+	/** A model or effort the server offers. An empty id means Claude Code's default. */
+	private record Option(String id, String label) {
+	}
+
+	private record Settings(String model, String effort) {
+	}
+
+	/** A change sent to the server, shown until a snapshot confirms it so the old value doesn't flash back. */
+	private record Pending(String agent, Settings settings, long until) {
+	}
+
+	private enum Picker {
+		MODEL, EFFORT
+	}
+
 	private List<Agent> agents = List.of();
 	private List<Entry> log = List.of();
 	private boolean loaded;
 	private boolean canUse = true;
-	private String model = "default";
-	private String effort = "default";
+	private List<Option> models = List.of();
+	private List<Option> efforts = List.of();
+	/** What a new agent starts with, from the host's config. */
+	private Settings defaults = new Settings("", "");
+	/** The model and effort picked in the new-agent form, or null to use the defaults. */
+	private Settings newSettings;
+	/** Changes not yet confirmed by a snapshot, by lowercased agent name. */
+	private final Map<String, Pending> pending = new HashMap<>();
+	/** The open model or effort list, or null. */
+	private Picker picker;
+	/** The highlighted row in the open list. */
+	private int pickerIndex;
+	private Hit modelChip, effortChip;
+	private final List<Hit> pickerRows = new ArrayList<>();
 	/** The agent whose log is shown, or null. */
 	private String selected;
 	/** Showing the new-agent form instead of an agent. */
@@ -182,15 +215,21 @@ public final class AgentsScreen extends Screen {
 		JsonObject o = JsonParser.parseString(json).getAsJsonObject();
 		clockOffset = o.get("now").getAsLong() - System.currentTimeMillis();
 		canUse = o.get("canUse").getAsBoolean();
-		model = o.get("model").getAsString();
-		effort = o.get("effort").getAsString();
+		models = options(o, "models");
+		efforts = options(o, "efforts");
+		defaults = new Settings(o.get("model").getAsString(), o.get("effort").getAsString());
 		List<Agent> list = new ArrayList<>();
 		for (JsonElement el : o.getAsJsonArray("agents")) {
 			JsonObject a = el.getAsJsonObject();
 			list.add(new Agent(a.get("name").getAsString(), a.get("status").getAsString(), a.get("activity").getAsString(),
-					a.get("last").getAsLong(), a.get("body").getAsBoolean(), a.get("preview").getAsString()));
+					a.get("last").getAsLong(), a.get("body").getAsBoolean(), a.get("preview").getAsString(),
+					a.get("model").getAsString(), a.get("effort").getAsString()));
 		}
 		agents = list;
+		pending.values().removeIf(p -> {
+			Agent a = agent(p.agent());
+			return a == null || new Settings(a.model(), a.effort()).equals(p.settings()) || System.currentTimeMillis() >= p.until();
+		});
 		if (o.has("error")) showError(o.get("error").getAsString());
 
 		String sel = o.has("selected") ? o.get("selected").getAsString() : null;
@@ -217,9 +256,29 @@ public final class AgentsScreen extends Screen {
 		return null;
 	}
 
+	private static List<Option> options(JsonObject o, String key) {
+		List<Option> out = new ArrayList<>();
+		for (JsonElement el : o.getAsJsonArray(key)) {
+			JsonObject j = el.getAsJsonObject();
+			out.add(new Option(j.get("id").getAsString(), j.get("label").getAsString()));
+		}
+		return out;
+	}
+
+	/** The model and effort the composer shows: the new agent's, or the selected agent's. Null if neither. */
+	private Settings settings() {
+		if (creating) return newSettings != null ? newSettings : defaults;
+		Agent a = selected == null ? null : agent(selected);
+		if (a == null) return null;
+		Pending p = pending.get(a.name().toLowerCase(Locale.ROOT));
+		if (p != null && System.currentTimeMillis() < p.until()) return p.settings();
+		return new Settings(a.model(), a.effort());
+	}
+
 	// ---- actions ----
 
 	private void select(String name) {
+		closePicker();
 		selected = name;
 		creating = false;
 		log = List.of();
@@ -231,13 +290,16 @@ public final class AgentsScreen extends Screen {
 	}
 
 	private void startCreating() {
+		if (!creating) newSettings = null;
+		closePicker();
 		creating = true;
 		updateWidgets();
 		setFocused(nameBox);
 	}
 
 	private void submit() {
-		if (!canUse) return;
+		// Before the first snapshot there are no defaults or agents to go on.
+		if (!canUse || !loaded) return;
 		String text = composer.getValue().strip();
 		if (creating) {
 			String name = nameBox.getValue().strip();
@@ -246,7 +308,8 @@ public final class AgentsScreen extends Screen {
 				setFocused(nameBox);
 				return;
 			}
-			ClientPlayNetworking.send(new MenuPayloads.Action("spawn", name, text));
+			Settings chosen = settings();
+			ClientPlayNetworking.send(new MenuPayloads.Action("spawn", name, text, chosen.model(), chosen.effort()));
 			nameBox.setValue("");
 			composer.setValue("");
 			select(name);
@@ -254,6 +317,37 @@ public final class AgentsScreen extends Screen {
 			ClientPlayNetworking.send(new MenuPayloads.Action("send", selected, text));
 			composer.setValue("");
 			scroll = 0;
+		}
+	}
+
+	private void togglePicker(Picker which) {
+		if (picker == which) {
+			closePicker();
+			return;
+		}
+		Settings now = settings();
+		if (now == null) return;
+		picker = which;
+		pickerIndex = Math.max(0, which == Picker.MODEL ? indexOf(models, now.model()) : indexOf(efforts, now.effort()));
+	}
+
+	private void closePicker() {
+		picker = null;
+		pickerRows.clear();
+	}
+
+	private void choose(Picker which, String id) {
+		closePicker();
+		setFocused(creating && nameBox.getValue().isBlank() ? nameBox : composer);
+		Settings now = settings();
+		if (now == null || !canUse) return;
+		Settings next = which == Picker.MODEL ? new Settings(id, now.effort()) : new Settings(now.model(), id);
+		if (next.equals(now)) return;
+		if (creating) {
+			newSettings = next;
+		} else if (selected != null) {
+			pending.put(selected.toLowerCase(Locale.ROOT), new Pending(selected, next, System.currentTimeMillis() + 3000));
+			ClientPlayNetworking.send(new MenuPayloads.Action("configure", selected, "", next.model(), next.effort()));
 		}
 	}
 
@@ -274,6 +368,20 @@ public final class AgentsScreen extends Screen {
 
 	@Override
 	public boolean keyPressed(KeyEvent event) {
+		if (picker != null) {
+			List<Option> options = picker == Picker.MODEL ? models : efforts;
+			if (event.isEscape()) {
+				closePicker();
+				return true;
+			}
+			if ((event.isUp() || event.isDown()) && !options.isEmpty()) {
+				pickerIndex = Math.floorMod(pickerIndex + (event.isUp() ? -1 : 1), options.size());
+				return true;
+			}
+			if (event.isConfirmation() && pickerIndex < options.size()) choose(picker, options.get(pickerIndex).id());
+			// The open list takes every key, so typing doesn't edit the message behind it.
+			return true;
+		}
 		if (event.isConfirmation()) {
 			if (creating && nameBox.isFocused()) {
 				setFocused(composer);
@@ -290,6 +398,20 @@ public final class AgentsScreen extends Screen {
 	@Override
 	public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
 		MouseButtonEvent e = toMenu(event);
+		if (picker != null) {
+			// An open list takes the click: pick an option, or close the list like a click outside a menu would.
+			for (Hit h : List.copyOf(pickerRows)) {
+				if (h.contains(e.x(), e.y())) {
+					h.action().run();
+					return true;
+				}
+			}
+			Picker open = picker;
+			closePicker();
+			Hit other = open == Picker.MODEL ? effortChip : modelChip;
+			if (other != null && other.contains(e.x(), e.y())) other.action().run();
+			return true;
+		}
 		if (super.mouseClicked(e, doubleClick)) return true;
 		for (Hit h : List.copyOf(hits)) {
 			if (h.contains(e.x(), e.y())) {
@@ -311,13 +433,21 @@ public final class AgentsScreen extends Screen {
 	}
 
 	@Override
+	public boolean charTyped(CharacterEvent event) {
+		return picker != null || super.charTyped(event);
+	}
+
+	@Override
 	public void mouseMoved(double x, double y) {
+		// Only a moving mouse moves the highlight, so the arrow keys work with the pointer over the list.
+		for (int i = 0; i < pickerRows.size(); i++) if (pickerRows.get(i).contains(x / zoom, y / zoom)) pickerIndex = i;
 		super.mouseMoved(x / zoom, y / zoom);
 	}
 
 	@Override
 	public boolean mouseScrolled(double guiX, double guiY, double scrollX, double scrollY) {
 		double x = guiX / zoom, y = guiY / zoom;
+		if (picker != null) return true;
 		if (x < sideW) {
 			sideScroll -= (int) (scrollY * ROW_H);
 			return true;
@@ -356,6 +486,7 @@ public final class AgentsScreen extends Screen {
 		else drawEmpty(g);
 		drawComposer(g, mouseX, mouseY);
 		super.extractRenderState(g, mouseX, mouseY, partialTick);
+		drawPicker(g);
 		g.pose().popMatrix();
 	}
 
@@ -582,10 +713,8 @@ public final class AgentsScreen extends Screen {
 		roundRect(g, x0, y0, x1, y1, composer.isFocused() ? FIELD_FOCUSED : FIELD_BORDER);
 		roundRect(g, x0 + 1, y0 + 1, x1 - 1, y1 - 1, FIELD);
 		if (composer.getValue().isEmpty()) g.text(font, ellipsize(hint, colW - 20), composer.getX(), composer.getY() + 2, TEXT_FAINT, false);
+		drawChips(g, mx, my, x0 + 4, y1 - 17);
 		hits.add(new Hit(x0, y0, x1 - 22, y1, () -> setFocused(composer)));
-
-		String meta = "Claude Code · " + model + (effort.equals("default") ? "" : " · " + effort);
-		g.text(font, ellipsize(meta, colW - 40), x0 + 8, y1 - 13, TEXT_FAINT, false);
 
 		boolean ready = canUse && (creating || selected != null && !composer.getValue().isBlank());
 		Hit send = new Hit(x1 - 20, y1 - 19, x1 - 5, y1 - 4, this::submit);
@@ -594,7 +723,143 @@ public final class AgentsScreen extends Screen {
 		hits.add(send);
 	}
 
+	/** The model and effort buttons under the message box. With nothing selected they show the defaults, greyed out. */
+	private void drawChips(GuiGraphicsExtractor g, int mx, int my, int x, int y) {
+		Settings now = settings();
+		boolean live = now != null && canUse;
+		if (now == null) now = defaults;
+		modelChip = chip(g, mx, my, x, y, live, Picker.MODEL, modelText(now.model()), 0);
+		effortChip = chip(g, mx, my, modelChip.x1() + 3, y, live, Picker.EFFORT, effortText(now.effort()), indexOf(efforts, now.effort()));
+	}
+
+	/** @param level for the effort button, how many bars to light */
+	private Hit chip(GuiGraphicsExtractor g, int mx, int my, int x, int y, boolean live, Picker which, String label, int level) {
+		int w = 4 + 9 + 4 + font.width(label) + (live ? 4 + 5 : 0) + 5;
+		Hit hit = new Hit(x, y, x + w, y + 13, () -> togglePicker(which));
+		if (live && (picker == which || hit.contains(mx, my))) roundRect(g, hit.x0(), hit.y0(), hit.x1(), hit.y1(), picker == which ? ROW_SELECTED : ROW_HOVER);
+		int ix = x + 4, iy = y + 3;
+		if (which == Picker.MODEL) spark(g, ix + 1, iy, live ? CLAUDE : TEXT_FAINT);
+		else bars(g, ix, iy, level, live);
+		int color = live ? TEXT_DIM : TEXT_FAINT;
+		g.text(font, label, ix + 13, y + 3, color, false);
+		if (live) {
+			chevron(g, hit.x1() - 10, y + 5, color);
+			hits.add(hit);
+		}
+		return hit;
+	}
+
+	private String modelText(String id) {
+		return id.isEmpty() ? "Default model" : label(models, id);
+	}
+
+	private String effortText(String id) {
+		return id.isEmpty() ? "Default effort" : label(efforts, id);
+	}
+
+	/** The open model or effort list, above its button and over everything else. */
+	private void drawPicker(GuiGraphicsExtractor g) {
+		pickerRows.clear();
+		Settings now = settings();
+		if (picker == null || now == null || !canUse) {
+			picker = null;
+			return;
+		}
+		Picker which = picker;
+		List<Option> options = which == Picker.MODEL ? models : efforts;
+		String current = which == Picker.MODEL ? now.model() : now.effort();
+		Hit anchor = which == Picker.MODEL ? modelChip : effortChip;
+		String title = which == Picker.MODEL ? "Model" : "Reasoning";
+		String defaultHint = "Claude Code picks";
+		int w = font.width(title);
+		for (Option o : options) w = Math.max(w, font.width(o.label()) + (o.id().isEmpty() ? 6 + font.width(defaultHint) : 0));
+		w += 7 + 22;
+		int h = 16 + options.size() * OPTION_H + 4;
+		int x0 = anchor.x0(), x1 = x0 + w, y1 = anchor.y0() - 4, y0 = y1 - h;
+
+		g.nextStratum();
+		roundRect(g, x0 - 1, y0 - 1, x1 + 1, y1 + 1, FIELD_BORDER);
+		roundRect(g, x0, y0, x1, y1, FIELD);
+		g.text(font, title, x0 + 7, y0 + 6, TEXT_FAINT, false);
+		int y = y0 + 16;
+		for (int i = 0; i < options.size(); i++) {
+			Option o = options.get(i);
+			Hit row = new Hit(x0 + 3, y, x1 - 3, y + OPTION_H, () -> choose(which, o.id()));
+			boolean chosen = o.id().equals(current);
+			if (i == pickerIndex) roundRect(g, row.x0(), row.y0(), row.x1(), row.y1(), ROW_SELECTED);
+			g.text(font, o.label(), x0 + 7, y + 3, chosen || i == pickerIndex ? TEXT : TEXT_NAME, false);
+			if (o.id().isEmpty()) g.text(font, defaultHint, x0 + 7 + font.width(o.label()) + 6, y + 3, TEXT_FAINT, false);
+			if (chosen) check(g, x1 - 14, y + 4, ACCENT);
+			pickerRows.add(row);
+			y += OPTION_H;
+		}
+	}
+
+	/**
+	 * Where a test should click, in menu coordinates: "model" or "effort" for a button, or
+	 * "option:<id>" for a row of the open list. Null if it isn't on screen.
+	 */
+	public int[] locate(String what) {
+		Hit hit = null;
+		if (what.equals("model")) hit = modelChip;
+		else if (what.equals("effort")) hit = effortChip;
+		else if (what.startsWith("option:") && picker != null) {
+			int i = indexOf(picker == Picker.MODEL ? models : efforts, what.substring("option:".length()));
+			if (i >= 0 && i < pickerRows.size()) hit = pickerRows.get(i);
+		}
+		return hit == null ? null : new int[]{(hit.x0() + hit.x1()) / 2, (hit.y0() + hit.y1()) / 2};
+	}
+
 	// ---- helpers ----
+
+	private static int indexOf(List<Option> options, String id) {
+		for (int i = 0; i < options.size(); i++) if (options.get(i).id().equals(id)) return i;
+		return -1;
+	}
+
+	private static String label(List<Option> options, String id) {
+		int i = indexOf(options, id);
+		return i < 0 ? id : options.get(i).label();
+	}
+
+	/** Claude's asterisk, 7 pixels across. */
+	private static void spark(GuiGraphicsExtractor g, int x, int y, int color) {
+		g.fill(x + 3, y, x + 4, y + 7, color);
+		g.fill(x, y + 3, x + 7, y + 4, color);
+		g.fill(x + 2, y + 2, x + 5, y + 5, color);
+		for (int d : new int[]{1, 5}) {
+			g.fill(x + d, y + 1, x + d + 1, y + 2, color);
+			g.fill(x + d, y + 5, x + d + 1, y + 6, color);
+		}
+	}
+
+	/**
+	 * Five rising bars, one lit per effort level: three for high, five for max. None for the default,
+	 * and all five for a custom effort from the config, which comes after the five levels.
+	 */
+	private static void bars(GuiGraphicsExtractor g, int x, int y, int level, boolean live) {
+		int lit = Mth.clamp(level, 0, 5);
+		for (int i = 0; i < 5; i++) {
+			int h = 3 + i;
+			int color = i < lit ? (live ? TEXT_DIM : TEXT_FAINT) : 0xFF3A3A44;
+			g.fill(x + i * 2, y + 7 - h, x + i * 2 + 1, y + 7, color);
+		}
+	}
+
+	private static void chevron(GuiGraphicsExtractor g, int x, int y, int color) {
+		g.fill(x, y, x + 1, y + 1, color);
+		g.fill(x + 4, y, x + 5, y + 1, color);
+		g.fill(x + 1, y + 1, x + 2, y + 2, color);
+		g.fill(x + 3, y + 1, x + 4, y + 2, color);
+		g.fill(x + 2, y + 2, x + 3, y + 3, color);
+	}
+
+	private static void check(GuiGraphicsExtractor g, int x, int y, int color) {
+		g.fill(x, y + 2, x + 1, y + 3, color);
+		g.fill(x + 1, y + 3, x + 2, y + 4, color);
+		g.fill(x + 2, y + 4, x + 3, y + 5, color);
+		for (int i = 0; i < 4; i++) g.fill(x + 3 + i, y + 3 - i, x + 4 + i, y + 4 - i, color);
+	}
 
 	private int statusColor(Agent a) {
 		return switch (a.status()) {
