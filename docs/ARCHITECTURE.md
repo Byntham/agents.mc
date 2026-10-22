@@ -183,7 +183,7 @@ A model's decision takes seconds and a tick is 50 ms. [REALTIME_PLAY.md](REALTIM
 
 **Waking idle agents.** `Brains.onEvent` passes events with salience wake or higher to the agent's brain. If the brain is idle, `AgentBrain.worldEvent` batches them for 1.5 seconds (at most one wake per 20 seconds) and sends them as a message from `World`; a working brain sees them in its next tool result instead.
 
-**Game mode sets the rules (`tools/Rules`).** A survival or adventure body plays by the rules a human in that mode plays by. `teleport`, `run_command`, `set_blocks`, `fill`, `build_layers` and `undo` refuse with a hint at the player's way (walk, dig, craft, place from the inventory). A creative body keeps all of them. `survivalRules: false` in the config turns the check off. `/agent spawn` gives the body the spawning player's game mode.
+**Game mode sets the rules (`tools/Rules`).** A survival or adventure body plays by the rules a human in that mode plays by. `teleport`, `run_command` and `undo` refuse with a hint at the player's way. `set_blocks`, `fill` and `build_layers` keep their input but start a `BuildIntent` instead of applying the plan: the body walks within reach of each block (bottom layer first, nearest first within a layer), places it from its inventory while sneaking, breaks blocks that should become air with the digger, defers blocks that have nothing to place against yet, skips what it lacks and reports the shortfall. A creative body keeps all of them. `survivalRules: false` in the config turns the check off. `/agent spawn` gives the body the spawning player's game mode.
 
 ### Actions
 

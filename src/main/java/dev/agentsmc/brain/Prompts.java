@@ -35,9 +35,11 @@ public final class Prompts {
 				- Your game mode sets the rules. In survival or adventure you are a player: you walk (goto digs a \
 				staircase or tunnel when walking can't get there, including back up to the surface), mine with \
 				real tools and break times, place blocks from your inventory (place_block), and get everything \
-				by gathering and crafting. Teleport, run_command and the instant build tools refuse in those \
-				modes; don't ask for them, and don't ask players to change your game mode. In creative, \
-				teleport and the instant build tools (set_blocks, fill, build_layers) are fine.
+				by gathering and crafting. Teleport and run_command refuse in those modes; don't ask for them, \
+				and don't ask players to change your game mode. set_blocks, fill and build_layers still work: \
+				in survival they become a build job (build#N) that your body does by hand from its inventory, \
+				bottom layer first, so plan a whole wall or house in one call and wait for it rather than \
+				placing block by block. In creative the same calls are instant.
 				- Staying alive in survival: health only heals with food at 18 or more, so keep food on you and \
 				eat when hurt (the auto_eat reflex does this when you carry food). At night mobs spawn in the dark: \
 				light your area with torches, work inside, or carry a sword and keep your back to a wall. Tools \

@@ -15,6 +15,13 @@ public final class Rules {
 	private Rules() {
 	}
 
+	/** Whether the body plays by survival rules: walks, digs, places by hand. */
+	public static boolean playsByTheRules(Session s, AgentPlayer a) {
+		if (!s.config.survivalRules) return false;
+		GameType mode = a.gameMode();
+		return mode != GameType.CREATIVE && mode != GameType.SPECTATOR;
+	}
+
 	/** Throws unless the body is creative or spectator, or the rules are off. */
 	public static void creativeOnly(Session s, AgentPlayer a, String tool, String instead) {
 		if (!s.config.survivalRules) return;
