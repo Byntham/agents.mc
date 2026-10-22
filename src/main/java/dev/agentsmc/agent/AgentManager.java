@@ -64,6 +64,8 @@ public final class AgentManager {
 		AgentPlayer agent = new AgentPlayer(server, level, profile, this);
 		if (diedAs != null) {
 			agent.restoreFrom(diedAs, false);
+			// The dead body dropped nothing (AgentPlayer.dropEquipment); its inventory carries over.
+			agent.getInventory().replaceWith(diedAs.getInventory());
 			// restoreFrom doesn't carry /tag tags; vanilla's PlayerList.respawn copies them separately.
 			for (String tag : diedAs.entityTags()) agent.addTag(tag);
 		} else {
@@ -73,6 +75,8 @@ public final class AgentManager {
 						.ifPresent(tag -> agent.load(TagValueInput.create(reporter, server.registryAccess(), tag)));
 			}
 		}
+		// The save carries the attributes it was written with; the body's own values win.
+		agent.applyPerks();
 		// The save may be from a body that just died mid-fall or on fire; start clean.
 		agent.resetFallDistance();
 		agent.clearFire();
@@ -130,7 +134,7 @@ public final class AgentManager {
 		// Dying within seconds of spawning means the spawn point itself is lethal; don't loop.
 		boolean respawn = agent.tickCount > 100;
 		// No actor, so the agent itself sees this in its own feed.
-		AgentsMc.events().add("agent_died", null, name + " died" + (respawn ? " and respawned at world spawn" : " right after spawning and was despawned"));
+		AgentsMc.events().sensed(name, "died", null, "You died" + (respawn ? " and respawned at world spawn with a fresh body. Whatever you were doing has stopped." : " right after spawning and were despawned"), dev.agentsmc.perception.EventLog.URGENT);
 		// Respawn as a fresh body at world spawn once the death has been fully processed.
 		server.execute(() -> {
 			if (agents.get(key(name)) != agent) return;
@@ -150,6 +154,11 @@ public final class AgentManager {
 			throw new ToolException("No agent named '" + name + "' is spawned. Call spawn_agent first (or list_agents).");
 		}
 		return agent;
+	}
+
+	/** A spawned agent by name, or null. */
+	public AgentPlayer find(String name) {
+		return name == null ? null : agents.get(key(name));
 	}
 
 	public AgentState state(String name) {

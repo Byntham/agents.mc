@@ -1,0 +1,448 @@
+package dev.agentsmc.tools;
+
+import dev.agentsmc.Session;
+import dev.agentsmc.agent.AgentPlayer;
+import dev.agentsmc.agent.AgentState;
+import dev.agentsmc.body.AttackIntent;
+import dev.agentsmc.body.Body;
+import dev.agentsmc.body.Digger;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.item.context.BlockPlaceContext;
+import net.minecraft.world.item.BlockItem;
+import dev.agentsmc.body.CollectIntent;
+import dev.agentsmc.body.FollowIntent;
+import dev.agentsmc.body.GotoIntent;
+import dev.agentsmc.body.Intent;
+import dev.agentsmc.body.MineIntent;
+import dev.agentsmc.body.Navigator;
+import dev.agentsmc.body.Waiters;
+import dev.agentsmc.mcp.Schema;
+import dev.agentsmc.mcp.ToolException;
+import dev.agentsmc.perception.BlockCodec;
+import dev.agentsmc.perception.EventLog;
+import dev.agentsmc.perception.Senses;
+import dev.agentsmc.perception.Views;
+import dev.agentsmc.util.OnServer;
+import net.minecraft.commands.arguments.EntityAnchorArgument;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.Vec3;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+
+/**
+ * Playing in real time: long-running intents (walk, follow, mine, fight, collect) that the body
+ * carries out tick by tick, a {@code wait} that blocks until something happens, and the "meanwhile"
+ * delta appended to every tool result so the model always acts on fresh state.
+ */
+public final class BodyTools {
+	/** Tools whose result already is the current state, so no delta is appended. */
+	private static final Set<String> NO_DELTA = Set.of("wait", "observe", "get_events", "get_status", "spawn_agent", "despawn_agent", "list_agents");
+	/** Claude Code aborts an MCP call that hasn't answered after 60 s. */
+	/** How far place_block reaches: no block to click, so this is the whole rule. */
+	private static final double PLACE_RANGE = 8.0;
+	private static final int MAX_WAIT_S = 50;
+
+	private BodyTools() {
+	}
+
+	public static void register(Session s) {
+		s.tools.register("goto",
+				"Walk to a point or to a player, with pathfinding over the terrain (jumps, drops, swimming, doors). A player target is tracked "
+						+ "until you reach them, so it works for 'come here'. Returns at once with an intent id; "
+						+ "the body keeps walking while you do other things. You get a '<id> done/failed' event when it ends, so call wait to let it happen. "
+						+ "If walking can't get there (e.g. you're underground), it digs a tunnel or staircase with the best tool you carry, and says how long that takes.",
+				Schema.of().agent(true)
+						.number("x", "Target x", false).number("y", "Target y (the block your feet should end up in)", false).number("z", "Target z", false)
+						.str("near_player", "Walk to this player instead of coordinates", false)
+						.number("distance", "With near_player: stop this many blocks away (default 2)", false)
+						.number("tolerance", "How close counts as arrived, in blocks (default 1.5)", false)
+						.bool("dig", "Dig through blocks when walking can't get there (default true, false in creative)", false),
+				args -> OnServer.call(s.server, () -> {
+					AgentPlayer a = s.agents.get(args.str("agent"));
+					GotoIntent intent;
+					if (args.has("near_player")) {
+						ServerPlayer p = Targets.player(s, args.str("near_player"));
+						if (p.level() != a.level()) throw new ToolException(p.getName().getString() + " is in another dimension");
+						if (p == a) throw new ToolException("That's you");
+						intent = new GotoIntent(a.body(), p.getName().getString(), Math.max(args.number("tolerance", 1.5), args.number("distance", 2)));
+					} else if (args.has("x") && args.has("y") && args.has("z")) {
+						intent = new GotoIntent(a.body(), new Vec3(args.number("x"), args.number("y"), args.number("z")), args.number("tolerance", 1.5));
+					} else {
+						throw new ToolException("Pass x, y and z, or near_player");
+					}
+					if (a.getAbilities().flying) {
+						a.getAbilities().flying = false;
+						a.onUpdateAbilities();
+					}
+					intent.dig(args.bool("dig", !a.isCreative()));
+					a.body().start(intent);
+					Navigator.State first = intent.planNow(a.body());
+					String plan = switch (first) {
+						case ARRIVED -> "already there";
+						case UNREACHABLE -> "no path found from here; the body will try to get closer, then report";
+						default -> intent.plan();
+					};
+					return intent.tag() + " started: " + plan + ".";
+				}));
+
+		s.tools.register("follow",
+				"Follow a player around, keeping a few blocks behind them, until cancelled. Returns at once with an intent id. "
+						+ "You'll get events if they get far ahead or can't be reached.",
+				Schema.of().agent(true).str("player", "Player to follow", true)
+						.number("distance", "How close to stay, in blocks (default 3)", false),
+				args -> OnServer.call(s.server, () -> {
+					AgentPlayer a = s.agents.get(args.str("agent"));
+					ServerPlayer p = Targets.player(s, args.str("player"));
+					if (p == a) throw new ToolException("You can't follow yourself");
+					if (a.getAbilities().flying) {
+						a.getAbilities().flying = false;
+						a.onUpdateAbilities();
+					}
+					FollowIntent intent = a.body().start(new FollowIntent(a.body(), p.getName().getString(), args.number("distance", 3)));
+					return intent.tag() + " started: following " + p.getName().getString() + ", currently " + Senses.relative(a, p.position()) + ".";
+				}));
+
+		s.tools.register("mine",
+				"Break blocks the way a survival player does: walk within reach, pick the best tool in the inventory, hold the button for the block's "
+						+ "break time, pick up the drops. Either name a block type to mine the nearest ones (block + count), or give one position (x, y, z). "
+						+ "Returns at once with an intent id; a 'mine#N done' event reports what was mined and picked up. "
+						+ "Buried blocks are reached by digging a staircase or tunnel; the reply says how long that takes, and whether a pickaxe would make it much faster.",
+				Schema.of().agent(true)
+						.str("block", "Block id or #tag to look for, e.g. oak_log, #logs, iron_ore", false)
+						.integer("count", "With block: how many to mine (default 1, max 64)", false)
+						.integer("radius", "With block: search radius (default 16, max 32)", false)
+						.integer("x", "A single block to mine", false).integer("y", "", false).integer("z", "", false)
+						.bool("dig", "Dig through other blocks to reach buried ones (default true, false in creative)", false),
+				args -> OnServer.call(s.server, () -> {
+					AgentPlayer a = s.agents.get(args.str("agent"));
+					List<BlockPos> targets;
+					String what;
+					if (args.has("x") && args.has("y") && args.has("z")) {
+						BlockPos p = new BlockPos(args.integer("x"), args.integer("y"), args.integer("z"));
+						BlockState st = a.level().getBlockState(p);
+						if (st.isAir()) throw new ToolException("There's only air at " + p.toShortString());
+						targets = List.of(p);
+						what = BlockCodec.id(st, BlockCodec.Detail.NONE);
+					} else if (args.has("block")) {
+						int count = Math.max(1, Math.min(64, args.integer("count", 1)));
+						int radius = Math.max(1, Math.min(32, args.integer("radius", 16)));
+						what = args.str("block");
+						// Prefer blocks with an open face: a player walks to the tree or the cliff, rather than
+						// tunnelling to the nearest block as the crow flies. Buried targets still come next.
+						List<BlockPos> found = Views.findBlockPositions(a.level(), a.blockPosition(), radius, what, Math.min(256, count * 8));
+						BlockPos feet = a.blockPosition();
+						found.sort(java.util.Comparator.comparingInt((BlockPos p) -> rank(a.level(), p)).thenComparingDouble(p -> p.distSqr(feet)));
+						targets = found.size() > count ? new ArrayList<>(found.subList(0, count)) : found;
+						if (targets.isEmpty()) throw new ToolException("No " + what + " within " + radius + " blocks. Try find_blocks with a bigger radius, or walk somewhere else.");
+						what = BlockCodec.shortId(what.startsWith("#") ? what : what);
+					} else {
+						throw new ToolException("Pass block (and count), or x, y, z");
+					}
+					// Another mine call while one is running adds to the job: a model that queues "mine, wait, mine,
+					// wait" with short waits must not cancel the block it's halfway through.
+					if (a.body().current() instanceof MineIntent running && !running.finished()) {
+						int added = running.addTargets(targets);
+						return String.format(Locale.ROOT, "%s: added %d block%s of %s to the job (%s).", running.tag(), added, added == 1 ? "" : "s", what, running.progress());
+					}
+					MineIntent intent = a.body().start(new MineIntent(a.body(), targets, what).dig(args.bool("dig", !a.isCreative())));
+					BlockPos first = targets.getFirst();
+					String plan = intent.planNow(a.body());
+					return String.format(Locale.ROOT, "%s started: %d block%s of %s, nearest at %d %d %d (%s)%s.", intent.tag(), targets.size(),
+							targets.size() == 1 ? "" : "s", what, first.getX(), first.getY(), first.getZ(), Senses.relative(a, Vec3.atCenterOf(first)),
+							plan.isEmpty() ? "" : "; " + plan);
+				}));
+
+		s.tools.register("attack",
+				"Fight an entity: chase it, hit it with the best weapon in the inventory whenever the attack cooldown allows, until it dies or gets away. "
+						+ "Returns at once with an intent id.",
+				Schema.of().agent(true).str("target", "A player name, an entity type (e.g. zombie: the nearest one), or an entity id from get_entities", true),
+				args -> OnServer.call(s.server, () -> {
+					AgentPlayer a = s.agents.get(args.str("agent"));
+					Entity target = Targets.entity(s, a, args.str("target"));
+					if (target == a) throw new ToolException("You can't attack yourself");
+					AttackIntent intent = a.body().start(new AttackIntent(a.body(), target, false));
+					return intent.tag() + " started: " + Senses.name(target) + " is " + Senses.relative(a, target.position()) + ".";
+				}));
+
+		s.tools.register("collect",
+				"Walk over to dropped items nearby and pick them up. Returns at once with an intent id.",
+				Schema.of().agent(true).str("item", "Only items whose id contains this, e.g. oak_log (default: anything)", false)
+						.number("radius", "How far to look, in blocks (default 8, max 32)", false),
+				args -> OnServer.call(s.server, () -> {
+					AgentPlayer a = s.agents.get(args.str("agent"));
+					String item = args.str("item", "").trim().toLowerCase(Locale.ROOT);
+					double radius = Math.max(1, Math.min(32, args.number("radius", 8)));
+					java.util.function.Predicate<ItemEntity> match = item.isEmpty() ? e -> true : e -> Views.stack(e.getItem().copyWithCount(1)).contains(item);
+					List<ItemEntity> items = a.level().getEntitiesOfClass(ItemEntity.class, a.getBoundingBox().inflate(radius), match);
+					if (items.isEmpty()) return "Nothing to pick up: no " + (item.isEmpty() ? "dropped items" : item + " items") + " within " + (int) radius + " blocks.";
+					CollectIntent intent = a.body().start(new CollectIntent(a.body(), match, item.isEmpty() ? "items" : item, radius));
+					return intent.tag() + " started: " + items.size() + " item stack" + (items.size() == 1 ? "" : "s") + " nearby.";
+				}));
+
+		s.tools.register("cancel", "Stop the body's current intent (goto, follow, mine, attack, collect). Without an id, stops everything.",
+				Schema.of().agent(true).integer("intent", "Intent id to cancel (the number after # in goto#3)", false),
+				args -> OnServer.call(s.server, () -> {
+					AgentPlayer a = s.agents.get(args.str("agent"));
+					if (args.has("intent")) {
+						int id = args.integer("intent");
+						return a.body().cancel(id, "cancelled") ? "Cancelled #" + id + "." : "No running intent #" + id + ". Doing: " + a.body().doing();
+					}
+					List<Intent> cancelled = a.body().cancelAll("cancelled");
+					if (cancelled.isEmpty()) return "Nothing was running.";
+					List<String> tags = new ArrayList<>();
+					for (Intent i : cancelled) tags.add(i.tag());
+					return "Cancelled " + String.join(", ", tags) + ".";
+				}));
+
+		s.tools.register("wait",
+				"Let time pass while your body carries out an intent or while you have nothing to do. Blocks until something happens to you "
+						+ "(an intent finishes or fails, you take damage, a mob closes in, a player talks to you) or the time runs out, then returns "
+						+ "your status and what happened. Costs nothing while waiting. Prefer this over polling observe.",
+				Schema.of().agent(true)
+						.integer("seconds", "Max seconds to wait (default 30, max " + MAX_WAIT_S + ")", false)
+						.enumStr("until", "any: return on anything notable (default). intent: only when an intent finishes or fails.", false, "any", "intent")
+						.integer("min_salience", "Ignore events below this: 0 everything, 1 notable (default), 2 important, 3 urgent", false),
+				args -> {
+					String agent = args.str("agent");
+					int seconds = Math.max(1, Math.min(MAX_WAIT_S, args.integer("seconds", 30)));
+					boolean intentsOnly = "intent".equals(args.str("until", "any"));
+					int min = Math.max(0, Math.min(3, args.integer("min_salience", 1)));
+					// Register the waiter and look for something already unread in one server-thread task:
+					// events are posted on that thread, so none can land in between and wake nobody.
+					record Armed(EventLog.Event pending, Waiters.Waiter waiter) {
+					}
+					Armed armed = OnServer.call(s.server, () -> {
+						AgentState st = s.agents.state(agent); // throws for an unknown agent, before anything is registered
+						boolean managed = managed(s, agent);
+						Waiters.Waiter w = s.waiters.register(agent, min, intentsOnly, !managed);
+						try {
+							for (EventLog.Event e : s.events.since(st.eventCursor, agent, 100, !managed).events()) {
+								if (e.salience() >= min && (!intentsOnly || e.type().equals("intent"))) return new Armed(e, w);
+							}
+							return new Armed(null, w);
+						} catch (RuntimeException e) {
+							s.waiters.unregister(w);
+							throw e;
+						}
+					});
+					long start = System.currentTimeMillis();
+					EventLog.Event woke = armed.pending();
+					try {
+						if (woke == null) woke = s.waiters.await(armed.waiter(), seconds * 1000L);
+						else s.waiters.unregister(armed.waiter());
+					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+						throw new ToolException("Interrupted while waiting");
+					}
+					double waited = (System.currentTimeMillis() - start) / 1000.0;
+					String reason = woke == null ? String.format(Locale.ROOT, "Nothing notable in %.0fs.", waited)
+							: String.format(Locale.ROOT, "Waited %.1fs. Woke for: %s", waited, woke.text());
+					EventLog.Event finalWoke = woke;
+					return OnServer.call(s.server, () -> reason + "\n" + delta(s, agent, finalWoke == null ? 0 : finalWoke.seq()));
+				});
+
+		s.tools.register("set_reflexes",
+				"Turn the body's reflexes on or off: auto_eat (eats from the inventory when food is low), fight_back (hits back at a mob that hit you), "
+						+ "flee_creepers (backs away from a creeper about to explode). All on by default. Reflexes report what they did as events.",
+				Schema.of().agent(true).bool("auto_eat", "", false).bool("fight_back", "", false).bool("flee_creepers", "", false),
+				args -> OnServer.call(s.server, () -> {
+					Body b = s.agents.get(args.str("agent")).body();
+					if (args.has("auto_eat")) b.reflexes.autoEat = args.bool("auto_eat", true);
+					if (args.has("fight_back")) b.reflexes.fightBack = args.bool("fight_back", true);
+					if (args.has("flee_creepers")) b.reflexes.fleeCreepers = args.bool("flee_creepers", true);
+					return "Reflexes: " + b.reflexes.describe();
+				}));
+
+		s.tools.register("hold",
+				"Put an item from the inventory in the main hand, e.g. a sword before a fight or a torch to place. "
+						+ "Matches by item id (oak_planks) or part of it (sword). 'nothing' empties the hand.",
+				Schema.of().agent(true).str("item", "Item id or part of one, or 'nothing'", true),
+				args -> OnServer.call(s.server, () -> {
+					AgentPlayer a = s.agents.get(args.str("agent"));
+					String item = args.str("item").trim().toLowerCase(Locale.ROOT);
+					if (item.equals("nothing") || item.equals("hand") || item.equals("empty")) {
+						var inv = a.getInventory();
+						for (int i = 0; i < 9; i++) {
+							if (inv.getItem(i).isEmpty()) {
+								a.body().hold(i);
+								return "Hands empty.";
+							}
+						}
+						throw new ToolException("Every hotbar slot is full; drop something first.");
+					}
+					if (!a.body().hold(stack -> matches(stack, item))) throw new ToolException("No " + item + " in the inventory. " + inventory(a));
+					return "Holding " + Views.stack(a.getMainHandItem()) + ".";
+				}));
+
+		s.tools.register("eat", "Eat something from the inventory now (auto_eat does this on its own when food is low).",
+				Schema.of().agent(true).str("item", "Which food (default: whatever fills the gap best)", false),
+				args -> OnServer.call(s.server, () -> {
+					AgentPlayer a = s.agents.get(args.str("agent"));
+					if (a.getFoodData().getFoodLevel() >= 20) return "Not hungry (food 20/20).";
+					String item = args.str("item", "").trim().toLowerCase(Locale.ROOT);
+					boolean held = item.isEmpty()
+							? a.body().hold(st -> st.has(net.minecraft.core.component.DataComponents.FOOD))
+							: a.body().hold(st -> st.has(net.minecraft.core.component.DataComponents.FOOD) && matches(st, item));
+					if (!held) throw new ToolException("No food in the inventory. " + inventory(a));
+					ItemStack stack = a.getMainHandItem();
+					InteractionResult r = a.gameMode.useItem(a, a.level(), stack, net.minecraft.world.InteractionHand.MAIN_HAND);
+					if (!a.isUsingItem()) throw new ToolException("Couldn't start eating " + Views.stack(stack) + " (" + r + ")");
+					return "Eating " + Views.stack(stack.copyWithCount(1)) + "; takes about 2 seconds.";
+				}));
+
+		s.tools.register("drop", "Drop items from the inventory on the ground in front of you.",
+				Schema.of().agent(true).str("item", "Item id or part of one", true).bool("all", "Drop the whole stack (default: one item)", false),
+				args -> OnServer.call(s.server, () -> {
+					AgentPlayer a = s.agents.get(args.str("agent"));
+					String item = args.str("item").trim().toLowerCase(Locale.ROOT);
+					if (!a.body().hold(stack -> matches(stack, item))) throw new ToolException("No " + item + " in the inventory. " + inventory(a));
+					String what = Views.stack(a.getMainHandItem());
+					a.drop(args.bool("all", false));
+					return "Dropped " + (args.bool("all", false) ? what : Views.stack(a.getMainHandItem().copyWithCount(1))) + ".";
+				}));
+
+		s.tools.register("place_block",
+				"Place one block from the inventory at a position within 8 blocks of you. It needs no block to rest on and no line of sight, "
+						+ "only the item. Use goto first if it's far. For anything bigger than a few blocks use build_layers, fill or set_blocks.",
+				Schema.of().agent(true).str("item", "Block item to place, e.g. oak_planks, torch", true).xyz("Target", true)
+						.str("block", "Exact block state, e.g. oak_stairs[facing=north]. Default: the state a player placing it from where you stand would get.", false),
+				args -> OnServer.call(s.server, () -> {
+					AgentPlayer a = s.agents.get(args.str("agent"));
+					Body body = a.body();
+					ServerLevel level = a.level();
+					BlockPos pos = new BlockPos(args.integer("x"), args.integer("y"), args.integer("z"));
+					Vec3 centre = Vec3.atCenterOf(pos);
+					if (a.position().distanceTo(centre) > PLACE_RANGE) {
+						throw new ToolException(String.format(Locale.ROOT, "Too far: %s is %s. goto a spot within %.0f blocks first.", pos.toShortString(), Senses.relative(a, centre), PLACE_RANGE));
+					}
+					BlockState there = level.getBlockState(pos);
+					if (!there.canBeReplaced()) throw new ToolException(pos.toShortString() + " already has " + BlockCodec.id(there));
+					if (a.getBoundingBox().intersects(new net.minecraft.world.phys.AABB(pos)) && !a.isCreative()) {
+						throw new ToolException("You're standing there. Step aside first.");
+					}
+					String item = args.str("item").trim().toLowerCase(Locale.ROOT);
+					if (!body.hold(stack -> matches(stack, item))) throw new ToolException("No " + item + " in the inventory. " + inventory(a));
+					ItemStack held = a.getMainHandItem();
+					if (!(held.getItem() instanceof BlockItem blockItem)) throw new ToolException(item + " isn't a block.");
+					// The block's state: as given, or the way the game would turn it for a player placing it from here.
+					BlockState state;
+					if (args.has("block")) {
+						state = BlockCodec.parse(args.str("block"));
+						if (state.getBlock() != blockItem.getBlock()) throw new ToolException("block " + args.str("block") + " doesn't match the item " + item + ".");
+					} else {
+						a.lookAt(EntityAnchorArgument.Anchor.EYES, centre);
+						BlockHitResult hit = body.placementHit(pos, pos.below());
+						state = blockItem.getBlock().getStateForPlacement(new BlockPlaceContext(a, InteractionHand.MAIN_HAND, held, hit));
+						if (state == null) state = blockItem.getBlock().defaultBlockState();
+					}
+					switch (body.placeFromInventory(pos, state, stack -> matches(stack, item))) {
+						case PLACED -> {
+						}
+						case NO_ITEM -> throw new ToolException("Not enough " + item + " for " + BlockCodec.id(state) + " (it takes " + Body.itemsFor(state) + "). " + inventory(a));
+						case BLOCKED -> throw new ToolException("Someone or something is standing at " + pos.toShortString() + ".");
+						case PROTECTED -> throw new ToolException(pos.toShortString() + " is in the protected spawn area.");
+						case FAILED -> throw new ToolException("Couldn't place " + item + " at " + pos.toShortString() + ".");
+					}
+					return "Placed " + BlockCodec.id(level.getBlockState(pos)) + " at " + AgentsMcXyz(pos) + ".";
+				}));
+
+		s.tools.register("use_block",
+				"Right-click a block within reach with what you're holding: open or close a door, press a button, flip a lever, ring a bell, use a crafting table...",
+				Schema.of().agent(true).xyz("Target", true),
+				args -> OnServer.call(s.server, () -> {
+					AgentPlayer a = s.agents.get(args.str("agent"));
+					Body body = a.body();
+					BlockPos pos = new BlockPos(args.integer("x"), args.integer("y"), args.integer("z"));
+					if (!body.inReach(pos)) throw new ToolException("Out of reach: " + pos.toShortString() + " is " + Senses.relative(a, Vec3.atCenterOf(pos)) + ". goto first.");
+					BlockState before = a.level().getBlockState(pos);
+					if (before.isAir()) throw new ToolException("Nothing at " + pos.toShortString());
+					a.lookAt(EntityAnchorArgument.Anchor.EYES, Vec3.atCenterOf(pos));
+					BlockHitResult hit = body.sight(pos);
+					if (hit == null) hit = Digger.hitOn(body, pos); // within reach is enough; a wall in between is no bar
+					InteractionResult r = body.useOn(hit);
+					BlockState after = a.level().getBlockState(pos);
+					return "Used " + BlockCodec.id(before) + " (" + r + ")" + (after != before ? "; it's now " + BlockCodec.id(after) : "") + ".";
+				}));
+
+		s.tools.register("sweep",
+				"A quick look around without a picture: for each direction relative to where you face, what the nearest thing is and how far, "
+						+ "which entities are that way, and whether there's a drop ahead. Cheaper than screenshot or get_blocks for deciding where to go.",
+				Schema.of().agent(true),
+				args -> OnServer.call(s.server, () -> s.agents.get(args.str("agent")).body().senses.sweep()));
+	}
+
+	// ---- the meanwhile delta --------------------------------------------------------------------
+
+	/**
+	 * What to append to a tool's result: the agent's status line and the events since its last look.
+	 * Null when the tool already returned that, or the agent has no body.
+	 */
+	public static String meanwhile(Session s, String tool, String agent) {
+		if (NO_DELTA.contains(tool)) return null;
+		return OnServer.call(s.server, () -> {
+			if (s.agents.find(agent) == null) return null;
+			return "--- meanwhile ---\n" + delta(s, agent, 0);
+		});
+	}
+
+	/** Status line plus unread events, draining the agent's cursor. Server thread. */
+	static String delta(Session s, String agent, long skipSeq) {
+		AgentPlayer a = s.agents.get(agent);
+		AgentState st = s.agents.state(agent);
+		EventLog.Page page = s.events.since(st.eventCursor, agent, 15, !managed(s, agent));
+		st.eventCursor = page.cursor();
+		StringBuilder sb = new StringBuilder(a.body().senses.statusLine()).append('\n');
+		sb.append(Views.events(page, s.server.getTickCount(), skipSeq));
+		return sb.toString();
+	}
+
+	/** Agents the mod runs only read chat from players allowed to direct them. */
+	static boolean managed(Session s, String agent) {
+		return s.brains != null && s.brains.find(agent) != null;
+	}
+
+	// ---- helpers --------------------------------------------------------------------------------
+
+	/**
+	 * Which targets to mine first: 0 for blocks with a side open to air (no digging to reach them),
+	 * 1 for buried blocks, 2 for blocks touching water. A player leaves ore on a lake bed for last:
+	 * swimming there is slower and water pours into the hole it leaves.
+	 */
+	private static int rank(ServerLevel level, BlockPos p) {
+		boolean open = false;
+		for (Direction d : Direction.values()) {
+			BlockPos n = p.relative(d);
+			if (!level.getFluidState(n).isEmpty()) return 2;
+			if (level.getBlockState(n).getCollisionShape(level, n).isEmpty()) open = true;
+		}
+		return open ? 0 : 1;
+	}
+
+	private static boolean matches(ItemStack stack, String query) {
+		String id = Views.stack(stack.copyWithCount(1));
+		return id.equals(query) || id.contains(query);
+	}
+
+	private static String inventory(AgentPlayer a) {
+		List<String> items = new ArrayList<>();
+		var inv = a.getInventory().getNonEquipmentItems();
+		for (ItemStack st : inv) if (!st.isEmpty()) items.add(Views.stack(st));
+		return items.isEmpty() ? "The inventory is empty." : "Inventory: " + String.join(", ", items) + ".";
+	}
+
+	private static String AgentsMcXyz(BlockPos pos) {
+		return pos.getX() + " " + pos.getY() + " " + pos.getZ();
+	}
+}

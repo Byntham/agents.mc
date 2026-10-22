@@ -23,6 +23,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
 /**
@@ -52,6 +53,8 @@ public final class McpServer {
 	private final Function<String, String> agentForKey;
 	private final Function<String, String> boundInstructions;
 	private final Map<String, JsonObject> boundSchemas = new ConcurrentHashMap<>();
+	/** Text appended to a tool's result, given the tool name and agent; may return null. */
+	private volatile BiFunction<String, String, String> onToolResult;
 
 	/**
 	 * @param agentForKey       the agent name a bound endpoint's key was issued for, or null if the key is unknown
@@ -64,8 +67,18 @@ public final class McpServer {
 		this.instructions = instructions;
 		this.agentForKey = agentForKey;
 		this.boundInstructions = boundInstructions;
-		this.http = HttpServer.create(new InetSocketAddress(InetAddress.getByName(host), port), 0);
-		this.executor = Executors.newFixedThreadPool(4, r -> {
+		HttpServer server;
+		try {
+			server = HttpServer.create(new InetSocketAddress(InetAddress.getByName(host), port), 0);
+		} catch (java.net.BindException e) {
+			// Another game on this computer has the port (a second client, or a test run). Any free port
+			// still serves the agents the mod runs itself; outside clients read the real port from the log.
+			server = HttpServer.create(new InetSocketAddress(InetAddress.getByName(host), 0), 0);
+			AgentsMc.LOGGER.warn("Agents MC: port {} is in use, using {} instead", port, server.getAddress().getPort());
+		}
+		this.http = server;
+		// Blocking tools (wait, screenshot) hold a thread each, so don't cap the pool.
+		this.executor = Executors.newCachedThreadPool(r -> {
 			Thread t = new Thread(r, "agentsmc-mcp");
 			t.setDaemon(true);
 			return t;
@@ -77,6 +90,11 @@ public final class McpServer {
 
 	public void start() {
 		http.start();
+	}
+
+	/** Appends extra text to every tool result that acts as an agent (the "meanwhile" delta). */
+	public void onToolResult(BiFunction<String, String, String> hook) {
+		this.onToolResult = hook;
 	}
 
 	public void stop() {
@@ -265,6 +283,15 @@ public final class McpServer {
 			AgentsMc.LOGGER.warn("Tool {} failed", name, e);
 			out = new Tool.Result("Internal error: " + e, null);
 			isError = true;
+		}
+		BiFunction<String, String, String> hook = onToolResult;
+		if (hook != null && arguments.has("agent") && arguments.get("agent").isJsonPrimitive()) {
+			try {
+				String extra = hook.apply(name, arguments.get("agent").getAsString());
+				if (extra != null && !extra.isBlank()) out = new Tool.Result(out.text() + "\n\n" + extra, out.image());
+			} catch (Exception e) {
+				AgentsMc.LOGGER.debug("Agents MC: no meanwhile for {}", name, e);
+			}
 		}
 
 		JsonArray contents = new JsonArray();

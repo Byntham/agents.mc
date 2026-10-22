@@ -48,6 +48,7 @@ public class AgentsMenuTest implements FabricClientGameTest {
 
 	@Override
 	public void runTest(ClientGameTestContext ctx) {
+		if (TestFilter.skip("menu")) return;
 		ctx.getInput().resizeWindow(1280, 720);
 		withFakeClaude(ctx);
 		if ("1".equals(System.getenv("AGENTSMC_LIVE"))) withRealClaude(ctx);

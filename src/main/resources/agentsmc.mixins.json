@@ -5,7 +5,8 @@
 	"mixins": [
 		"BlockItemMixin",
 		"CommandSourceStackAccessor",
-		"ConnectionAccessor"
+		"ConnectionAccessor",
+		"ServerLevelMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

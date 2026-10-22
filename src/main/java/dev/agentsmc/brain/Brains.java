@@ -12,6 +12,7 @@ import dev.agentsmc.agent.AgentManager;
 import dev.agentsmc.agent.AgentPlayer;
 import dev.agentsmc.mcp.ToolException;
 import dev.agentsmc.mixin.CommandSourceStackAccessor;
+import dev.agentsmc.perception.EventLog;
 import dev.agentsmc.perception.Views;
 import dev.agentsmc.tools.Targets;
 import net.minecraft.ChatFormatting;
@@ -179,10 +180,11 @@ public final class Brains {
 		if (body == null) {
 			if (near != null) {
 				Vec3 pos = Targets.inFrontOf(near, 2);
-				body = spawnBody(name, near.level(), pos, Targets.yawToward(pos, near.position()), GameType.CREATIVE);
+				// Play the same game the human plays: a survival player gets a survival companion.
+				body = spawnBody(name, near.level(), pos, Targets.yawToward(pos, near.position()), near.gameMode());
 			} else {
 				ServerLevel level = s.server.overworld();
-				body = spawnBody(name, level, Vec3.atBottomCenterOf(level.getRespawnData().pos()), 0, GameType.CREATIVE);
+				body = spawnBody(name, level, Vec3.atBottomCenterOf(level.getRespawnData().pos()), 0, s.server.getDefaultGameType());
 			}
 		}
 		if (brain == null) {
@@ -264,6 +266,16 @@ public final class Brains {
 			return;
 		}
 		for (AgentBrain b : addressed) send(sender.getName().getString(), sender, "in chat", b, text);
+	}
+
+	/**
+	 * Something an agent's body sensed. If the agent's brain is idle, important events wake it with a
+	 * message from the world; a working brain sees them in its next tool result instead.
+	 */
+	public void onEvent(EventLog.Event e) {
+		if (e.audience() == null || e.salience() < EventLog.WAKE || !s.config.wakeOnEvents) return;
+		AgentBrain b = find(e.audience());
+		if (b != null) b.worldEvent(e.text());
 	}
 
 	// ---- permissions ----

@@ -28,6 +28,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -45,6 +46,13 @@ public final class AgentBrain {
 	}
 
 	private static final String TOOL_PREFIX = "mcp__minecraft__";
+	/** Idle agents are woken for world events at most this often. */
+	private static final long WAKE_INTERVAL_MS = 20_000;
+	private static final ScheduledExecutorService TIMER = Executors.newSingleThreadScheduledExecutor(r -> {
+		Thread t = new Thread(r, "agentsmc-brain-timer");
+		t.setDaemon(true);
+		return t;
+	});
 	private static final String INTERRUPTED_TOOL = "The user doesn't want to proceed";
 	private static final String SETTINGS_REQUEST = "settings-";
 
@@ -86,6 +94,10 @@ public final class AgentBrain {
 	private String lastSender;
 	private boolean resumed, initSeen, resumeFailed, stopRequested;
 	private final Map<String, String> toolNames = new HashMap<>();
+	/** World events waiting to wake an idle agent, guarded by this. */
+	private final List<String> pendingWorld = new ArrayList<>();
+	private boolean wakeScheduled;
+	private long lastWake;
 	private final ArrayDeque<String> stderrTail = new ArrayDeque<>();
 
 	AgentBrain(String name, Brains owner, String sessionId, String model, String effort) {
@@ -167,6 +179,35 @@ public final class AgentBrain {
 		if (context != null) content += "\n\n[Where " + from + " was when they sent this]\n" + context.strip();
 		JsonObject msg = userMessage(content, "next");
 		io.execute(() -> writeUserMessage(msg.toString(), startsTurn));
+	}
+
+	/**
+	 * Something the body sensed while the agent was idle. Batched for a moment and rate limited, then
+	 * sent as a message from the world. A working agent sees events in its tool results instead.
+	 */
+	public void worldEvent(String text) {
+		long delay;
+		synchronized (this) {
+			if (status != Status.IDLE || closed) return;
+			pendingWorld.add(text);
+			if (wakeScheduled) return;
+			wakeScheduled = true;
+			delay = Math.max(1500, WAKE_INTERVAL_MS - (System.currentTimeMillis() - lastWake));
+		}
+		TIMER.schedule(this::flushWorld, delay, TimeUnit.MILLISECONDS);
+	}
+
+	private void flushWorld() {
+		String text;
+		synchronized (this) {
+			wakeScheduled = false;
+			if (pendingWorld.isEmpty()) return;
+			text = String.join("\n", pendingWorld);
+			pendingWorld.clear();
+			if (status != Status.IDLE || closed) return; // busy again; the next tool result carries the events
+			lastWake = System.currentTimeMillis();
+		}
+		send("World", "your senses", text, null);
 	}
 
 	/**

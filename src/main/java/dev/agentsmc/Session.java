@@ -1,6 +1,7 @@
 package dev.agentsmc;
 
 import dev.agentsmc.agent.AgentManager;
+import dev.agentsmc.body.Waiters;
 import dev.agentsmc.brain.Brains;
 import dev.agentsmc.mcp.McpServer;
 import dev.agentsmc.mcp.ToolRegistry;
@@ -14,6 +15,8 @@ public final class Session {
 	public final AgentManager agents;
 	public final EventLog events;
 	public final ToolRegistry tools;
+	/** Blocked wait tool calls, woken by events. */
+	public final Waiters waiters = new Waiters();
 	public McpServer mcp;
 	/** Agents the mod runs with Claude Code. */
 	public Brains brains;

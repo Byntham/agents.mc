@@ -100,6 +100,7 @@ public final class AgentTools {
 						.bool("fly", "Creative/spectator only: hover at the target instead of falling (default true)", false),
 				args -> OnServer.call(s.server, () -> {
 					AgentPlayer a = s.agents.get(args.str("agent"));
+					Rules.creativeOnly(s, a, "teleport", "walk there with goto (it digs if it has to), or follow the player.");
 					ServerLevel level = a.level();
 					Vec3 pos;
 					float yaw = a.getYRot();
@@ -164,6 +165,7 @@ public final class AgentTools {
 							throw new ToolException("run_command is off for agents while every player can direct them (whoCanUseAgents in config/agentsmc.json)");
 						}
 						AgentPlayer a = s.agents.get(args.str("agent"));
+						Rules.creativeOnly(s, a, "run_command", "get what you need by gathering, crafting and mining; ask the player to change your game mode if the task truly needs commands.");
 						List<String> output = new ArrayList<>();
 						CommandSource collector = new CommandSource() {
 							@Override

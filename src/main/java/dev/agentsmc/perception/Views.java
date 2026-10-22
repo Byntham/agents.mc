@@ -322,12 +322,11 @@ public final class Views {
 
 	// ---- search and inspect ---------------------------------------------------------------------
 
-	public static String findBlocks(ServerLevel level, BlockPos center, int radius, String query, int limit) {
+	/** Positions of blocks matching {@code query} within {@code radius}, nearest first. */
+	public static List<BlockPos> findBlockPositions(ServerLevel level, BlockPos center, int radius, String query, int limit) {
 		if (radius < 1 || radius > MAX_SEARCH_RADIUS) throw new ToolException("radius must be 1.." + MAX_SEARCH_RADIUS);
 		Predicate<BlockState> match = matcher(query);
-		record Hit(BlockPos pos, BlockState state, double dist) {
-		}
-		List<Hit> hits = new ArrayList<>();
+		List<BlockPos> hits = new ArrayList<>();
 		int yMin = Math.max(level.getMinY(), center.getY() - radius), yMax = Math.min(level.getMaxY(), center.getY() + radius);
 		for (int cx = (center.getX() - radius) >> 4; cx <= (center.getX() + radius) >> 4; cx++) {
 			for (int cz = (center.getZ() - radius) >> 4; cz <= (center.getZ() + radius) >> 4; cz++) {
@@ -343,21 +342,25 @@ public final class Views {
 								BlockState s = section.getBlockState(lx, ly, lz);
 								if (!match.test(s)) continue;
 								BlockPos p = new BlockPos((cx << 4) + lx, y, (cz << 4) + lz);
-								double d = Math.sqrt(p.distSqr(center));
-								if (d <= radius) hits.add(new Hit(p, s, d));
+								if (p.distSqr(center) <= (double) radius * radius) hits.add(p);
 							}
 						}
 					}
 				}
 			}
 		}
-		hits.sort(Comparator.comparingDouble(Hit::dist));
+		hits.sort(Comparator.comparingDouble(p -> p.distSqr(center)));
+		return hits.size() > limit ? new ArrayList<>(hits.subList(0, limit)) : hits;
+	}
+
+	public static String findBlocks(ServerLevel level, BlockPos center, int radius, String query, int limit) {
+		List<BlockPos> all = findBlockPositions(level, center, radius, query, Integer.MAX_VALUE);
 		StringBuilder sb = new StringBuilder();
-		sb.append(String.format(Locale.ROOT, "Found %d blocks matching '%s' within %d of %d %d %d, nearest first%s:\n", hits.size(), query, radius,
-				center.getX(), center.getY(), center.getZ(), hits.size() > limit ? " (showing " + limit + ")" : ""));
-		for (Hit hit : hits.subList(0, Math.min(limit, hits.size()))) {
-			sb.append(String.format(Locale.ROOT, "  %s at %d %d %d (%.1f away)\n", BlockCodec.id(hit.state()),
-					hit.pos().getX(), hit.pos().getY(), hit.pos().getZ(), hit.dist()));
+		sb.append(String.format(Locale.ROOT, "Found %d blocks matching '%s' within %d of %d %d %d, nearest first%s:\n", all.size(), query, radius,
+				center.getX(), center.getY(), center.getZ(), all.size() > limit ? " (showing " + limit + ")" : ""));
+		for (BlockPos p : all.subList(0, Math.min(limit, all.size()))) {
+			sb.append(String.format(Locale.ROOT, "  %s at %d %d %d (%.1f away)\n", BlockCodec.id(level.getBlockState(p)),
+					p.getX(), p.getY(), p.getZ(), Math.sqrt(p.distSqr(center))));
 		}
 		return sb.toString();
 	}
@@ -379,6 +382,31 @@ public final class Views {
 			String nbt = be.saveWithoutMetadata(level.registryAccess()).toString();
 			sb.append("Block entity data: ").append(nbt.length() > 2000 ? nbt.substring(0, 2000) + "..." : nbt).append('\n');
 		}
+		return sb.toString();
+	}
+
+	// ---- events ---------------------------------------------------------------------------------
+
+	/**
+	 * Unread events as lines with how long ago they happened. Events the agent's own senses produced
+	 * are already in the second person; others get their type as a prefix.
+	 *
+	 * @param skipSeq an event already shown (the one a wait woke for), or 0
+	 */
+	public static String events(EventLog.Page page, int nowTick, long skipSeq) {
+		StringBuilder sb = new StringBuilder();
+		if (page.lost()) sb.append("(Some older events were dropped before you read them.)\n");
+		List<EventLog.Event> list = page.events();
+		if (list.isEmpty()) return sb.append("No new events.\n").toString();
+		for (EventLog.Event e : list) {
+			if (e.seq() == skipSeq) continue;
+			double ago = Math.max(0, nowTick - e.tick()) / 20.0;
+			String when = ago < 1 ? "now" : ago < 60 ? String.format(Locale.ROOT, "%.0fs ago", ago) : String.format(Locale.ROOT, "%.0fm ago", ago / 60);
+			sb.append('[').append(when).append("] ");
+			if (e.audience() == null) sb.append(e.type()).append(": ");
+			sb.append(e.text()).append('\n');
+		}
+		if (page.remaining() > 0) sb.append(page.remaining()).append(" more unread; call get_events to read them.\n");
 		return sb.toString();
 	}
 
@@ -407,7 +435,7 @@ public final class Views {
 		return BlockCodec.shortId(level.dimension().identifier().toString());
 	}
 
-	private static String phase(long t) {
+	public static String phase(long t) {
 		if (t < 1000) return "sunrise";
 		if (t < 6000) return "morning";
 		if (t < 9000) return "midday";

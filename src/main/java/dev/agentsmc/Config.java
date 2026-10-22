@@ -32,6 +32,10 @@ public final class Config {
 	 * "everyone". Agents run on the host's Claude account.
 	 */
 	public String whoCanUseAgents = "ops";
+	/** Wake an idle agent's Claude Code when its body senses something important (damage, a mob closing in, a task finishing). */
+	public boolean wakeOnEvents = true;
+	/** Survival and adventure bodies can't teleport, run commands or build instantly; they walk, dig, craft and place like a player. */
+	public boolean survivalRules = true;
 
 	public static Config load(Path path) {
 		Config config = new Config();

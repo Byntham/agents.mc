@@ -5,7 +5,7 @@
 	"name": "Agents MC tests",
 	"environment": "*",
 	"entrypoints": {
-		"fabric-client-gametest": ["dev.agentsmc.test.ScreenshotTest", "dev.agentsmc.test.AgentsMenuTest"]
+		"fabric-client-gametest": ["dev.agentsmc.test.BodyTest", "dev.agentsmc.test.LiveBodyTest", "dev.agentsmc.test.LiveSurvivalTest", "dev.agentsmc.test.TerrainTest", "dev.agentsmc.test.DigTest", "dev.agentsmc.test.CraftTest","dev.agentsmc.test.PovTest", "dev.agentsmc.test.BuildTest", "dev.agentsmc.test.DiagTest", "dev.agentsmc.test.ScreenshotTest", "dev.agentsmc.test.AgentsMenuTest"]
 	},
 	"depends": {
 		"agentsmc": "*"

@@ -11,7 +11,9 @@ import dev.agentsmc.net.MenuServer;
 import dev.agentsmc.perception.BlockCodec;
 import dev.agentsmc.perception.EventLog;
 import dev.agentsmc.tools.AgentTools;
+import dev.agentsmc.tools.BodyTools;
 import dev.agentsmc.tools.BuildTools;
+import dev.agentsmc.tools.CraftTools;
 import dev.agentsmc.tools.PerceptionTools;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
@@ -34,6 +36,9 @@ public class AgentsMc implements ModInitializer {
 	private static final String INSTRUCTIONS = """
 			Agents MC lets you play in a live Minecraft world as a player-shaped agent body, alongside humans.
 			Start with spawn_agent (or list_agents to reuse a body), then observe to orient yourself.
+			Long actions are intents the body carries out on its own: goto, follow, mine, attack, collect. They return at once with an id; \
+			call wait to let them happen and get the result. Every tool result ends with a "meanwhile" block: the agent's status line and the \
+			events since its last look (damage, mobs closing in, sounds, players nearby, intents finishing).
 			Perception is text: get_blocks returns a palette plus one character grid per y-level, get_surface \
 			returns a top-down height/top-block map, find_blocks and get_entities answer targeted questions, and \
 			get_events reports chat and block changes made by others since your last check. screenshot returns a \
@@ -92,9 +97,14 @@ public class AgentsMc implements ModInitializer {
 		AgentTools.register(s);
 		PerceptionTools.register(s);
 		BuildTools.register(s);
+		BodyTools.register(s);
+		CraftTools.register(s);
 		s.brains = new Brains(s);
+		s.events.listen(s.waiters::onEvent);
+		s.events.listen(s.brains::onEvent);
 		try {
 			s.mcp = new McpServer(config.host, config.port, config.token, s.tools, INSTRUCTIONS, s.brains::agentForKey, Prompts::boundInstructions);
+			s.mcp.onToolResult((tool, agent) -> BodyTools.meanwhile(s, tool, agent));
 			s.mcp.start();
 			LOGGER.info("Agents MC: MCP server listening on http://{}:{}/mcp ({} tools)", config.host, s.mcp.port(), s.tools.all().size());
 		} catch (Exception e) {
@@ -109,6 +119,7 @@ public class AgentsMc implements ModInitializer {
 		Session s = session;
 		session = null;
 		if (s == null) return;
+		s.waiters.cancelAll();
 		s.brains.shutdown();
 		if (s.mcp != null) s.mcp.stop();
 		s.agents.clear();

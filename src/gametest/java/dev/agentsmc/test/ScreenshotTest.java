@@ -41,6 +41,7 @@ public class ScreenshotTest implements FabricClientGameTest {
 
 	@Override
 	public void runTest(ClientGameTestContext ctx) {
+		if (TestFilter.skip("screenshot")) return;
 		// Not the screenshot size, so capture frames have to resize the render target and put it back.
 		ctx.getInput().resizeWindow(1600, 900);
 		try (TestSingleplayerContext world = ctx.worldBuilder().adjustSettings(s -> s.setAllowCommands(true)).create()) {

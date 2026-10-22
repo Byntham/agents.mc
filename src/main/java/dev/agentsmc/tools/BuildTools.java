@@ -7,6 +7,7 @@ import dev.agentsmc.AgentsMc;
 import dev.agentsmc.Session;
 import dev.agentsmc.agent.AgentPlayer;
 import dev.agentsmc.agent.AgentState;
+import dev.agentsmc.body.BuildIntent;
 import dev.agentsmc.mcp.Schema;
 import dev.agentsmc.mcp.ToolException;
 import dev.agentsmc.perception.BlockCodec;
@@ -46,7 +47,7 @@ public final class BuildTools {
 	}
 
 	public static void register(Session s) {
-		s.tools.register("set_blocks", "Place specific blocks at specific positions. Use \"air\" to remove a block.",
+		s.tools.register("set_blocks", "Place specific blocks at specific positions. Use \"air\" to remove a block. In creative this is instant; a survival body turns it into a build job: it walks within reach of each block, places it from its inventory (or breaks it), bottom layer first, and reports what it lacked.",
 				Schema.of().agent(true).raw("blocks", blockListSchema(), true),
 				args -> {
 					JsonArray list = args.array("blocks");
@@ -59,12 +60,15 @@ public final class BuildTools {
 						changes.put(new BlockPos(o.get("x").getAsInt(), o.get("y").getAsInt(), o.get("z").getAsInt()),
 								cache.computeIfAbsent(block, BlockCodec::parseSpec));
 					}
-					return OnServer.call(s.server, () -> apply(s, s.agents.get(args.str("agent")), "set " + changes.size() + " blocks", changes));
+					return OnServer.call(s.server, () -> {
+						AgentPlayer a = s.agents.get(args.str("agent"));
+						return apply(s, a, "set " + changes.size() + " blocks", changes);
+					});
 				});
 
 		s.tools.register("fill",
 				"Fill a box between two corners with one block. mode: solid (default), hollow (shell with air inside), "
-						+ "outline (shell only, inside untouched). Optional 'replace' limits the fill to blocks of that type (e.g. \"air\" to only fill empty space).",
+						+ "outline (shell only, inside untouched). Optional 'replace' limits the fill to blocks of that type (e.g. \"air\" to only fill empty space). A survival body does it as a build job from its inventory.",
 				Schema.of().agent(true)
 						.integer("x1", "Corner 1 x", true).integer("y1", "Corner 1 y", true).integer("z1", "Corner 1 z", true)
 						.integer("x2", "Corner 2 x", true).integer("y2", "Corner 2 y", true).integer("z2", "Corner 2 z", true)
@@ -100,7 +104,7 @@ public final class BuildTools {
 				});
 
 		s.tools.register("build_layers",
-				"Build a structure from layered character grids, the same format get_blocks returns. "
+				"Build a structure from layered character grids, the same format get_blocks returns. In creative it appears at once; a survival body builds it as a job (bottom layer first, out of its inventory, a few blocks a second; call wait). "
 						+ "origin (x,y,z) is the north-west-bottom corner. layers[0] is the bottom layer at y; each layer is a list of rows; "
 						+ "row 0 is the north edge (z), each next row is one block further south (+z); character 0 of a row is at x, then +x eastward. "
 						+ "palette maps single characters to blocks. A space means 'leave unchanged' and '.' always means air. "
@@ -137,13 +141,17 @@ public final class BuildTools {
 						}
 					}
 					if (changes.size() > s.config.maxBuildBlocks) throw new ToolException("Structure has " + changes.size() + " blocks; limit is " + s.config.maxBuildBlocks);
-					return OnServer.call(s.server, () -> apply(s, s.agents.get(args.str("agent")), "build_layers", changes));
+					return OnServer.call(s.server, () -> {
+						AgentPlayer a = s.agents.get(args.str("agent"));
+						return apply(s, a, "build_layers", changes);
+					});
 				});
 
 		s.tools.register("undo", "Revert the agent's most recent build (set_blocks, fill or build_layers). Can be called repeatedly, up to 32 edits back.",
 				Schema.of().agent(true),
 				args -> OnServer.call(s.server, () -> {
 					AgentPlayer a = s.agents.get(args.str("agent"));
+					Rules.creativeOnly(s, a, "undo", "mine or place blocks to change things back.");
 					AgentState.Edit edit = s.agents.state(args.str("agent")).popEdit();
 					if (edit == null) return "Nothing to undo.";
 					// Undo where the build happened, even if the agent has since moved to another dimension.
@@ -157,6 +165,14 @@ public final class BuildTools {
 
 	private static String apply(Session s, AgentPlayer agent, String description, Map<BlockPos, BlockCodec.Spec> changes) {
 		if (changes.size() > s.config.maxBuildBlocks) throw new ToolException("That is " + changes.size() + " blocks; the limit is " + s.config.maxBuildBlocks);
+		// A survival body builds from its inventory: the same plan becomes a job the body carries out block by block.
+		if (Rules.playsByTheRules(s, agent)) {
+			if (changes.size() > 512) throw new ToolException("That is " + changes.size() + " blocks; as a job, keep a build under 512 and do it in parts.");
+			BuildIntent intent = agent.body().start(new BuildIntent(agent.body(), description, changes));
+			String shortfall = intent.shortfall(agent.body());
+			return intent.tag() + " started: " + intent.plan() + (shortfall.isEmpty() ? "" : "; " + shortfall + " (those will be skipped unless you get them)")
+					+ ". Call wait; you get an event when it finishes.";
+		}
 		return applyChanges(s, agent, agent.level(), description, changes, null);
 	}
 

@@ -4,6 +4,7 @@ import com.mojang.blaze3d.platform.InputConstants;
 import dev.agentsmc.net.MenuPayloads;
 import dev.agentsmc.perception.Screenshots;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
@@ -21,6 +22,7 @@ public final class AgentsMcClient implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
 		Screenshots.install(new AgentCamera());
+		if (FrameRecorder.enabled()) ClientLifecycleEvents.CLIENT_STOPPING.register(mc -> FrameRecorder.stop());
 		openMenu = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.agentsmc.menu", InputConstants.KEY_K, CATEGORY));
 		ClientTickEvents.END_CLIENT_TICK.register(mc -> {
 			while (openMenu.consumeClick()) open(mc);
