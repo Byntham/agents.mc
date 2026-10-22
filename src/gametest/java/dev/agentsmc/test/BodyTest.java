@@ -57,10 +57,10 @@ public class BodyTest implements FabricClientGameTest {
 			world.getConnection().waitForChunksRender();
 			run("time set noon");
 			run("weather clear");
-			run("gamerule doMobSpawning false");
-			run("gamerule doDaylightCycle false");
-			run("gamerule doWeatherCycle false");
-			run("gamerule sendCommandFeedback false");
+			run("gamerule send_command_feedback false");
+			run("gamerule spawn_monsters false");
+			run("gamerule advance_time false");
+			run("gamerule advance_weather false");
 			port = world.getServer().computeOnServer(server -> AgentsMc.session().mcp.port());
 			ctx.runOnClient(mc -> mc.gui.hud.vignetteBrightness = 0);
 
@@ -76,6 +76,7 @@ public class BodyTest implements FabricClientGameTest {
 			run("give " + AGENT + " iron_axe");
 			run("give " + AGENT + " iron_sword");
 			run("give " + AGENT + " bread 8");
+			ctx.runOnClient(mc -> mc.gui.hud.getChat().clearMessages(false));
 			watch(40);
 			ctx.takeScreenshot("body-00-spawned");
 

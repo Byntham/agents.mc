@@ -52,9 +52,10 @@ public class LiveBodyTest implements FabricClientGameTest {
 			world.getConnection().waitForChunksRender();
 			run("time set noon");
 			run("weather clear");
-			run("gamerule doMobSpawning false");
-			run("gamerule doDaylightCycle false");
-			run("gamerule sendCommandFeedback false");
+			run("gamerule send_command_feedback false");
+			run("gamerule spawn_monsters false");
+			run("gamerule advance_time false");
+			run("gamerule advance_weather false");
 			ctx.runOnClient(mc -> mc.gui.hud.vignetteBrightness = 0);
 			BlockPos h = world.getServer().computeOnServer(server -> host(server).blockPosition());
 			int x = h.getX(), y = h.getY(), z = h.getZ();
@@ -71,6 +72,7 @@ public class LiveBodyTest implements FabricClientGameTest {
 			run("give " + AGENT + " iron_axe");
 			run("give " + AGENT + " iron_sword");
 			run("give " + AGENT + " bread 4");
+			ctx.runOnClient(mc -> mc.gui.hud.getChat().clearMessages(false));
 			watch(40);
 			ctx.takeScreenshot("live-00-spawned");
 
