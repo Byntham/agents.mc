@@ -154,7 +154,7 @@ public final class AgentTools {
 
 		s.tools.register("run_command",
 				"Run a Minecraft command as the agent (gamemaster permission, positioned at the agent), e.g. "
-						+ "\"give @s oak_planks 64\", \"time set day\", \"clone ...\". Returns the command's feedback.",
+						+ "\"give @s oak_planks 64\", \"time set day\", \"weather clear\". Returns the command's feedback.",
 				Schema.of().agent(true).str("command", "Command, with or without the leading slash", true),
 				args -> {
 					if (!s.config.allowCommands) throw new ToolException("run_command is disabled in config/agentsmc.json (allowCommands)");

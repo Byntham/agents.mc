@@ -223,7 +223,7 @@ So an agent's tool calls act as its own body, and it can't spawn or remove bodie
 
 ### Talking to agents
 
-- **Chat.** A chat message that @mentions an agent (`@Builder ...`) goes to that agent as `<player> (in chat): ...`. Messages agents send with `say` are system messages, which don't fire chat events, so agents can't trigger each other in a loop.
+- **Chat.** A chat message that @mentions an agent (`@Builder ...`) goes to that agent as `<player> (in chat): ...`. Below the text, every message from a player (chat, menu or `/agent spawn`) carries where the sender was and the block they were looking at when they sent it, so "build here" still means the right spot after the agent's startup delay. The menu log shows only the text. Messages agents send with `say` are system messages, which don't fire chat events, so agents can't trigger each other in a loop.
 - **The menu (`client/AgentsScreen`).** While the menu is open, the client asks for the state twice a second (`menu_request`). The server answers with a JSON snapshot (`menu_state`): every agent's status and current activity, plus the selected agent's activity log. Sending, stopping and creating agents go through `menu_action`. All packets are in `net/MenuPayloads`.
 - **The log.** `ActivityLog` turns the stream into entries the menu shows: player messages, the model's own text, one line per tool call, `say` messages, errors, and "Finished in 12s".
 

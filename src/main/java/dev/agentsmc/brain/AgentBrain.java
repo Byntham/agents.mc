@@ -108,9 +108,10 @@ public final class AgentBrain {
 	 * Delivers a player's message. If the agent is mid-turn, Claude reads it as soon as its current
 	 * tool calls finish (priority "next"); otherwise it starts a turn.
 	 *
-	 * @param via where it came from, as the agent should read it, e.g. "in chat"
+	 * @param via     where it came from, as the agent should read it, e.g. "in chat"
+	 * @param context where the sender was and what they were looking at as they sent it, or null
 	 */
-	public void send(String from, String via, String text) {
+	public void send(String from, String via, String text, String context) {
 		synchronized (this) {
 			log.add(ActivityLog.Kind.USER, from, text);
 			lastSender = from;
@@ -121,7 +122,9 @@ public final class AgentBrain {
 				turnStart = lastActive;
 			}
 		}
-		JsonObject msg = userMessage(from + " (" + via + "): " + text, "next");
+		String content = from + " (" + via + "): " + text;
+		if (context != null) content += "\n\n[Where " + from + " was when they sent this]\n" + context.strip();
+		JsonObject msg = userMessage(content, "next");
 		io.execute(() -> writeUserMessage(msg.toString()));
 	}
 
