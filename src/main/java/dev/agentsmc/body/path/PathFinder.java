@@ -327,7 +327,7 @@ public final class PathFinder {
 			}
 			Cell feet = cell(to);
 			if (feet == Cell.WATER) {
-				relax(cur, to, dist * swimCost(to), MoveType.SWIM);
+				relax(cur, to, dist * swimCost(to) * current(cur.pos, to), MoveType.SWIM);
 			} else if (feet == Cell.LADDER) {
 				relax(cur, to, dist * 2.0, MoveType.CLIMB);
 			} else if (door) {
@@ -455,6 +455,22 @@ public final class PathFinder {
 			if (!isNode(to)) return;
 			if (cell(to) != Cell.WATER && to.getY() > cur.pos.getY()) return;
 			relax(cur, to, swimCost(to), MoveType.SWIM);
+		}
+
+		/**
+		 * Flowing water pushes the body. Going with the current is a little cheaper; against it is far
+		 * dearer, so the planner goes round where it can, instead of wading in place.
+		 */
+		private double current(BlockPos from, BlockPos to) {
+			var fluid = level.getFluidState(to);
+			if (fluid.isEmpty() || fluid.isSource()) return 1.0;
+			var flow = fluid.getFlow(level, to);
+			if (flow.lengthSqr() < 1e-4) return 1.0;
+			double dx = to.getX() - from.getX(), dz = to.getZ() - from.getZ();
+			double len = Math.sqrt(dx * dx + dz * dz);
+			if (len < 1e-6) return 1.0;
+			double dot = (flow.x * dx + flow.z * dz) / (len * flow.length());
+			return dot < -0.3 ? 6.0 : dot > 0.3 ? 0.8 : 1.5;
 		}
 
 		private double swimCost(BlockPos feet) {

@@ -200,7 +200,8 @@ public final class Navigator {
 
 		// Movement.
 		boolean inWater = agent.isInWater();
-		boolean sprint = remaining() > 6 && !inWater && node.how() == MoveType.WALK && node.dig().isEmpty();
+		boolean sprint = remaining() > 6 && !inWater && node.how() == MoveType.WALK && node.dig().isEmpty()
+				|| inWater && node.how() == MoveType.SWIM; // swim, don't wade
 		body.sprint(sprint || node.how() == MoveType.JUMP_GAP);
 		body.moveToward(target, 1.0);
 		openDoors(node);

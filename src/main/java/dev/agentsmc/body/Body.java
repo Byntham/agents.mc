@@ -96,7 +96,8 @@ public final class Body {
 		}
 
 		applyLook();
-		boolean canSprint = sprint && agent.getFoodData().getFoodLevel() > 6 && !agent.isUsingItem() && !sneak && !agent.isInWater();
+		// Sprinting in water is swimming: faster, and the only way through a current.
+		boolean canSprint = sprint && agent.getFoodData().getFoodLevel() > 6 && !agent.isUsingItem() && !sneak;
 		if (agent.isSprinting() != canSprint) agent.setSprinting(canSprint);
 		if (agent.isShiftKeyDown() != sneak) agent.setShiftKeyDown(sneak);
 
