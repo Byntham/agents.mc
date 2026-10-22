@@ -102,7 +102,9 @@ public class LiveBodyTest implements FabricClientGameTest {
 				run("gamemode spectator Player0");
 				run("spectate " + AGENT + " Player0");
 			}
-			chat("@" + AGENT + " see the three oak trunks south of me? chop them all down and come back to me when you're done");
+			// A spectated host has no position of its own, so in POV mode don't ask it to come back.
+			chat("@" + AGENT + (pov ? " see the three oak trunks south of me? chop them all down and tell me when you're done"
+					: " see the three oak trunks south of me? chop them all down and come back to me when you're done"));
 			int logsBefore = logsStanding(x, y, z);
 			waitForBrain(b -> b.status() == AgentBrain.Status.IDLE && logsStanding(x, y, z) <= 2, 20 * 240);
 			LOG.info("logs standing: {} before, {} after", logsBefore, logsStanding(x, y, z));
