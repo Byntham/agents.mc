@@ -132,7 +132,12 @@ public final class BodyTools {
 						int count = Math.max(1, Math.min(64, args.integer("count", 1)));
 						int radius = Math.max(1, Math.min(32, args.integer("radius", 16)));
 						what = args.str("block");
-						targets = Views.findBlockPositions(a.level(), a.blockPosition(), radius, what, count);
+						// Prefer blocks with an open face: a player walks to the tree or the cliff, rather than
+						// tunnelling to the nearest block as the crow flies. Buried targets still come next.
+						List<BlockPos> found = Views.findBlockPositions(a.level(), a.blockPosition(), radius, what, Math.min(256, count * 8));
+						BlockPos feet = a.blockPosition();
+						found.sort(java.util.Comparator.comparingInt((BlockPos p) -> exposed(a.level(), p) ? 0 : 1).thenComparingDouble(p -> p.distSqr(feet)));
+						targets = found.size() > count ? new ArrayList<>(found.subList(0, count)) : found;
 						if (targets.isEmpty()) throw new ToolException("No " + what + " within " + radius + " blocks. Try find_blocks with a bigger radius, or walk somewhere else.");
 						what = BlockCodec.shortId(what.startsWith("#") ? what : what);
 					} else {
@@ -395,6 +400,15 @@ public final class BodyTools {
 	}
 
 	// ---- helpers --------------------------------------------------------------------------------
+
+	/** Whether a block has a side open to air or water, so it can be reached without digging. */
+	private static boolean exposed(ServerLevel level, BlockPos p) {
+		for (Direction d : Direction.values()) {
+			BlockPos n = p.relative(d);
+			if (level.getBlockState(n).getCollisionShape(level, n).isEmpty()) return true;
+		}
+		return false;
+	}
 
 	private static boolean matches(ItemStack stack, String query) {
 		String id = Views.stack(stack.copyWithCount(1));

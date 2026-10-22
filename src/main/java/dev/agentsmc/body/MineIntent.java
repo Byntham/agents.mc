@@ -240,8 +240,9 @@ public final class MineIntent extends Intent {
 	private boolean collectDrops(Body body) {
 		// Between blocks only grab what's right here; the wider sweep is for the end. Items that resist
 		// pickup for a while (on a ledge, in a crevice) are left alone instead of stalling the job.
-		double range = finalCollect ? 6 : 2.5;
-		List<ItemEntity> items = body.level().getEntitiesOfClass(ItemEntity.class, body.agent.getBoundingBox().inflate(range, finalCollect ? 3 : 1.5, range),
+		// The end-of-job sweep looks well below too: drops from a canopy land many blocks under the agent.
+		double range = finalCollect ? 8 : 2.5;
+		List<ItemEntity> items = body.level().getEntitiesOfClass(ItemEntity.class, body.agent.getBoundingBox().inflate(range, finalCollect ? 10 : 1.5, range),
 				e -> triedItems.getOrDefault(e.getId(), 0) < GIVE_UP_TICKS);
 		ItemEntity nearest = null;
 		double best = Double.MAX_VALUE;
