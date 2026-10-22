@@ -523,6 +523,14 @@ public final class Body {
 		var level = agent.level();
 		if (!mayInteract(pos)) return Placed.PROTECTED;
 		if (!level.isUnobstructed(state, pos, net.minecraft.world.phys.shapes.CollisionContext.empty())) return Placed.BLOCKED;
+		// A door, bed or tall plant takes a second cell, which its placement callback writes without
+		// looking. Check it here: free, allowed, and nobody standing in it.
+		BlockPos second = secondCell(state, pos);
+		if (second != null) {
+			if (!mayInteract(second)) return Placed.PROTECTED;
+			if (!level.getBlockState(second).canBeReplaced()) return Placed.FAILED;
+			if (!level.isUnobstructed(state, second, net.minecraft.world.phys.shapes.CollisionContext.empty())) return Placed.BLOCKED;
+		}
 		int cost = agent.isCreative() ? 0 : itemsFor(state);
 		var inv = agent.getInventory();
 		int slot = -1;
@@ -536,8 +544,13 @@ public final class Body {
 		if (!level.setBlock(pos, state, net.minecraft.world.level.block.Block.UPDATE_ALL)) return Placed.FAILED;
 		BlockState placed = level.getBlockState(pos);
 		net.minecraft.world.level.block.entity.BlockEntity be = level.getBlockEntity(pos);
-		if (be != null) be.applyComponentsFromItemStack(used);
-		placed.getBlock().setPlacedBy(level, pos, placed, agent, used);
+		if (be != null) {
+			be.applyComponentsFromItemStack(used);
+			be.setChanged();
+		}
+		// The callback adds the other half of a door or bed. A second half placed on its own (a plan
+		// listing both) gets none: its first half's callback made it, or will.
+		if (!isSecondHalf(placed)) placed.getBlock().setPlacedBy(level, pos, placed, agent, used);
 		stack.shrink(cost);
 		var sound = placed.getSoundType();
 		level.playSound(null, pos, sound.getPlaceSound(), net.minecraft.sounds.SoundSource.BLOCKS, (sound.getVolume() + 1) / 2, sound.getPitch() * 0.8f);
@@ -554,10 +567,31 @@ public final class Body {
 				net.minecraft.world.level.block.state.properties.BlockStateProperties.CANDLES,
 				net.minecraft.world.level.block.state.properties.BlockStateProperties.PICKLES,
 				net.minecraft.world.level.block.state.properties.BlockStateProperties.EGGS,
-				net.minecraft.world.level.block.state.properties.BlockStateProperties.LAYERS}) {
+				net.minecraft.world.level.block.state.properties.BlockStateProperties.LAYERS,
+				net.minecraft.world.level.block.state.properties.BlockStateProperties.FLOWER_AMOUNT,
+				net.minecraft.world.level.block.state.properties.BlockStateProperties.SEGMENT_AMOUNT}) {
 			if (state.hasProperty(p)) return state.getValue(p);
 		}
 		return 1;
+	}
+
+	/** Whether a state is the half of a two-block block that its first half's callback creates. */
+	public static boolean isSecondHalf(BlockState state) {
+		if (state.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.DOUBLE_BLOCK_HALF)
+				&& state.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.DOUBLE_BLOCK_HALF) == net.minecraft.world.level.block.state.properties.DoubleBlockHalf.UPPER) return true;
+		return state.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.BED_PART)
+				&& state.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.BED_PART) == net.minecraft.world.level.block.state.properties.BedPart.HEAD;
+	}
+
+	/** The cell a first half's callback writes (a door's upper half, a bed's head), or null for a one-block state. */
+	public static BlockPos secondCell(BlockState state, BlockPos pos) {
+		if (state.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.DOUBLE_BLOCK_HALF)
+				&& state.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.DOUBLE_BLOCK_HALF) == net.minecraft.world.level.block.state.properties.DoubleBlockHalf.LOWER) return pos.above();
+		if (state.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.BED_PART) && state.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING)
+				&& state.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.BED_PART) == net.minecraft.world.level.block.state.properties.BedPart.FOOT) {
+			return pos.relative(state.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING));
+		}
+		return null;
 	}
 
 	/**

@@ -48,6 +48,8 @@ public final class BuildIntent extends Intent {
 	private int placed, broken, approachTicks, stuck, cooldown;
 	private final Map<String, Integer> missing = new LinkedHashMap<>();
 	private final List<String> failed = new ArrayList<>();
+	/** Second halves pushed back to wait for their first half, and how often. */
+	private final Map<BlockPos, Integer> later = new LinkedHashMap<>();
 
 	public BuildIntent(Body body, String description, Map<BlockPos, BlockCodec.Spec> changes) {
 		this.description = description;
@@ -162,6 +164,17 @@ public final class BuildIntent extends Intent {
 			if (++stuck > 60) skip("kept standing in the way");
 			return;
 		}
+		if (Body.isSecondHalf(want)) {
+			// A door's upper half or a bed's head: its first half's callback makes it. Come back to it
+			// after the rest, and if the first half never came, say so.
+			int n = later.merge(pos, 1, Integer::sum);
+			if (n > 2) skip("its other half wasn't placed");
+			else {
+				jobs.add(current);
+				current = null;
+			}
+			return;
+		}
 		Item item = want.getBlock().asItem();
 		if (item == null || item == Items.AIR) {
 			skip("no item places " + BlockCodec.id(want, BlockCodec.Detail.NONE));
@@ -255,7 +268,7 @@ public final class BuildIntent extends Intent {
 	public String shortfall(Body body) {
 		Map<String, Integer> need = new LinkedHashMap<>();
 		for (Job j : jobs) {
-			if (j.spec().state().isAir()) continue;
+			if (j.spec().state().isAir() || Body.isSecondHalf(j.spec().state())) continue;
 			Item item = j.spec().state().getBlock().asItem();
 			if (item == null) continue;
 			need.merge(Views.stack(new ItemStack(item)), Body.itemsFor(j.spec().state()), Integer::sum);

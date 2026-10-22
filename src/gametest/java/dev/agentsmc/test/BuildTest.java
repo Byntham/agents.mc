@@ -58,9 +58,11 @@ public class BuildTest implements FabricClientGameTest {
 			call("spawn_agent", obj("name", AGENT, "x", x + 0.5, "y", (double) y, "z", z + 3.5, "gamemode", "survival"));
 			run("give " + AGENT + " cobblestone 64");
 			run("give " + AGENT + " glass 1");
+			run("give " + AGENT + " oak_door 1");
 			ctx.waitTicks(20);
 
-			// A 5x5 hut: walls three high with a doorway on the north side and two windows.
+			// A 5x5 hut: walls three high with a door on the north side and two windows. The door is
+			// one item for two cells; the plan names both halves, and the lower one makes the upper.
 			JsonObject args = new JsonObject();
 			args.addProperty("agent", AGENT);
 			args.addProperty("x", x + 3);
@@ -69,10 +71,12 @@ public class BuildTest implements FabricClientGameTest {
 			JsonObject palette = new JsonObject();
 			palette.addProperty("c", "cobblestone");
 			palette.addProperty("g", "glass");
+			palette.addProperty("d", "oak_door[facing=south,half=lower]");
+			palette.addProperty("D", "oak_door[facing=south,half=upper]");
 			args.add("palette", palette);
 			JsonArray layers = new JsonArray();
-			layers.add(rows("cc.cc", "c...c", "c...c", "c...c", "ccccc"));
-			layers.add(rows("cc.cc", "g...g", "c...c", "c...c", "ccccc"));
+			layers.add(rows("ccdcc", "c...c", "c...c", "c...c", "ccccc"));
+			layers.add(rows("ccDcc", "g...g", "c...c", "c...c", "ccccc"));
 			layers.add(rows("ccccc", "c...c", "c...c", "c...c", "ccccc"));
 			args.add("layers", layers);
 			JsonObject started = call("build_layers", args);
@@ -94,6 +98,10 @@ public class BuildTest implements FabricClientGameTest {
 			if (cobble < 40) throw new AssertionError("Expected the hut's cobblestone placed, found " + cobble + ": " + woke);
 			if (held > 24) throw new AssertionError("The cobblestone should have come from the inventory, " + held + " left");
 			if (!woke.contains("glass")) throw new AssertionError("The missing glass should be reported: " + woke);
+			boolean door = world.getServer().computeOnServer(server -> server.overworld().getBlockState(new BlockPos(x + 5, y, z + 6)).is(Blocks.OAK_DOOR)
+					&& server.overworld().getBlockState(new BlockPos(x + 5, y + 1, z + 6)).is(Blocks.OAK_DOOR));
+			if (!door) throw new AssertionError("Both halves of the door should stand in the doorway: " + woke);
+			if (count("oak_door") != 0) throw new AssertionError("The door should have cost its one item");
 			ctx.takeScreenshot("build-01-hut");
 		}
 	}
