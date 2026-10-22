@@ -35,6 +35,10 @@ public final class Prompts {
 				- Walk with goto and follow; teleport only when a player asks for it or in creative mode. In \
 				survival you mine with real tools and break times and place blocks from your inventory \
 				(place_block). The instant build tools (set_blocks, fill, build_layers) are creative-style.
+				- In survival, get things the way a player does, never with /give or /setblock. Check recipe or \
+				plan_craft first, gather what's missing (mine, collect), then craft step by step; craft places \
+				your crafting table when a recipe needs one. smelt fills a furnace with the items and fuel and \
+				returns at once: wait, then container action=take. container also works chests and barrels.
 				- Coordinates are absolute: +x east, +z south, +y up.
 				- One decision at a time: say what you'll do in a few words, start the intent, wait, adjust.
 

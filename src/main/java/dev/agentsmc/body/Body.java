@@ -58,6 +58,9 @@ public final class Body {
 	private Vec3 lastPos;
 	/** Blocks per second over the last tick, for the status line. */
 	private double speed;
+	// One delayed task (closing a container a moment after opening it, so the lid is seen to move).
+	private Runnable later;
+	private int laterTicks;
 
 	public Body(AgentPlayer agent) {
 		this.agent = agent;
@@ -74,6 +77,11 @@ public final class Body {
 		lookTarget = null;
 		lookEntity = null;
 		if (lastPos == null) lastPos = agent.position();
+		if (later != null && --laterTicks <= 0) {
+			Runnable task = later;
+			later = null;
+			task.run();
+		}
 
 		senses.tick();
 		reflexes.tick();
@@ -98,6 +106,12 @@ public final class Body {
 		speed = d.horizontalDistance() * 20;
 		if (d.lengthSqr() > 1e-6 && agent.isAlive()) agent.checkMovementStatistics(d.x, d.y, d.z);
 		lastPos = pos;
+	}
+
+	/** Runs {@code task} on this body's tick after {@code ticks} ticks, replacing any task already waiting. Null cancels. */
+	public void later(int ticks, Runnable task) {
+		later = task;
+		laterTicks = ticks;
 	}
 
 	/** Called from {@link AgentPlayer#applyInput()}: copies this tick's input into the entity. */
@@ -355,13 +369,16 @@ public final class Body {
 
 	/** The tool in the inventory that breaks this block fastest, with the right tool preferred when drops need it. */
 	public void holdToolFor(BlockState state) {
-		holdBest(s -> {
-			double v = s.getDestroySpeed(state);
-			if (state.requiresCorrectToolForDrops() && !s.isCorrectToolForDrops(state)) v *= 0.1;
-			// Don't dig with the sword if anything else will do: it wears fast and digs slowly.
-			if (s.has(DataComponents.WEAPON) && v <= 1.5) v *= 0.5;
-			return v > 1 ? v : 0; // bare hands score zero, so a block with no tool stays in the current hand
-		});
+		holdBest(s -> toolScore(s, state));
+	}
+
+	/** How good an item is for breaking a block; zero means no better than bare hands. */
+	public static double toolScore(ItemStack s, BlockState state) {
+		double v = s.getDestroySpeed(state);
+		if (state.requiresCorrectToolForDrops() && !s.isCorrectToolForDrops(state)) v *= 0.1;
+		// Don't dig with the sword if anything else will do: it wears fast and digs slowly.
+		if (s.has(DataComponents.WEAPON) && v <= 1.5) v *= 0.5;
+		return v > 1 ? v : 0; // bare hands score zero, so a block with no tool stays in the current hand
 	}
 
 	/** The best melee weapon: swords and axes by their attack damage. */

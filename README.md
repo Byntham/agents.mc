@@ -35,7 +35,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the modding background, the
 | | |
 |---|---|
 | Bodies | `spawn_agent`, `despawn_agent`, `list_agents`, `teleport`, `look_at`, `say`, `run_command` |
-| Playing | `goto`, `follow`, `mine`, `attack`, `collect` (intents the body carries out on its own), `cancel`, `wait` (block until something happens), `set_reflexes`, `hold`, `eat`, `drop`, `place_block`, `use_block` |
+| Playing | `goto`, `follow`, `mine`, `attack`, `collect` (intents the body carries out on its own), `cancel`, `wait` (block until something happens), `set_reflexes`, `hold`, `eat`, `drop`, `place_block`, `use_block`, `recipe`, `plan_craft` (what's missing and the steps), `craft` (2x2 grid or a crafting table, placed if needed), `smelt`, `container` (look, take, put) |
 | Perception | `observe` (status + map + entities + new events in one call), `sweep` (what is in each direction), `find_player` (where someone is now and what they're looking at), `get_status`, `get_blocks`, `get_surface`, `get_entities`, `find_blocks`, `inspect_block`, `get_events`, `screenshot` |
 | Building | `set_blocks`, `fill`, `build_layers` (same grid format as `get_blocks`), `undo` |
 
