@@ -23,7 +23,8 @@ import java.util.Map;
  * removes blocks anywhere within {@link #RADIUS} of itself, any height, a few blocks a second, bottom
  * layer first. No block to click, no line of sight, no scaffolding: a player manages those with hands
  * and eyes the body hasn't got. What it does need is the materials, since every block placed comes
- * out of the inventory and every block removed goes into it, and to be there while it works.
+ * out of the inventory and every block removed goes into it, and to be there while it works. Taking
+ * a block out waits its break time first, as mining would.
  */
 public final class BuildIntent extends Intent {
 	/** How far from the body a block may be placed or removed. */
@@ -42,6 +43,8 @@ public final class BuildIntent extends Intent {
 	private final int total;
 	private final Vec3 site;
 	private Job current;
+	/** The block whose break time is being waited out, so cancelling the job doesn't skip the wait. */
+	private BlockPos breaking;
 	private int placed, broken, approachTicks, stuck, cooldown;
 	private final Map<String, Integer> missing = new LinkedHashMap<>();
 	private final List<String> failed = new ArrayList<>();
@@ -98,17 +101,13 @@ public final class BuildIntent extends Intent {
 		}
 		BlockPos pos = current.pos();
 		BlockState want = current.spec().state();
-		BlockState have = body.level().getBlockState(pos);
-		if (current.spec().matches(have)) {
-			finish();
-			return;
-		}
 
-		// Be at the site: within range of this block, walking toward the middle of the build so one
-		// spot serves most of it.
+		// Be at the site first: within range of this block, walking toward the middle of the build
+		// so one spot serves most of it. The world isn't read until then, so a far plan never pulls
+		// in chunks the body isn't near.
 		Vec3 centre = Vec3.atCenterOf(pos);
 		Vec3 here = body.agent.position();
-		if (Math.hypot(here.x - centre.x, here.z - centre.z) > RADIUS - 2) {
+		if (Math.hypot(here.x - centre.x, here.z - centre.z) > RADIUS - 2 || !body.level().hasChunkAt(pos)) {
 			body.face(centre);
 			Vec3 goal = new Vec3(site.x, here.y, site.z);
 			Navigator.State s = nav.toward(goal.distanceTo(centre) < RADIUS - 6 ? goal : centre, 6.0);
@@ -118,62 +117,85 @@ public final class BuildIntent extends Intent {
 			return;
 		}
 		approachTicks = 0;
+		BlockState have = body.level().getBlockState(pos);
+		if (current.spec().matches(have)) {
+			finish();
+			return;
+		}
 		if (!body.mayInteract(pos)) {
 			skip("protected spawn area");
 			return;
 		}
 
 		// Something is there that shouldn't be: take it out first (also how "air" in a plan is done).
-		if (!have.isAir() && !have.canBeReplaced()) {
+		// Grass and flowers under a block to be placed go with the placement; under "air" they go too.
+		boolean clear = !have.isAir() && (!have.canBeReplaced() || want.isAir());
+		if (clear) {
 			if (have.getDestroySpeed(body.level(), pos) < 0) {
 				skip("can't break " + BlockCodec.id(have, BlockCodec.Detail.NONE));
 				return;
 			}
-			double seconds = Digger.seconds(body, pos, have, null);
+			if (!pos.equals(breaking)) {
+				// Wait the break time out first, as mining would; then take it out.
+				breaking = pos;
+				cooldown = (int) Math.clamp(Math.ceil(Digger.seconds(body, pos, have, null) * 20), PLACE_TICKS, 100);
+				body.face(centre);
+				return;
+			}
+			breaking = null;
 			body.removeToInventory(pos);
 			if (want.isAir()) {
 				broken++;
 				finish();
+				cooldown = PLACE_TICKS;
 			}
-			// Breaking takes about as long as it would with the tool in hand.
-			cooldown = (int) Math.clamp(Math.ceil(seconds * 20), PLACE_TICKS, 100);
 			return;
 		}
 		if (want.isAir()) {
-			finish(); // already air, or grass that any block replaces
+			finish(); // already air
 			return;
 		}
 
-		// Placing: never into the body itself.
+		// Placing: never into the body itself, nor into anyone else.
 		if (body.agent.getBoundingBox().intersects(new AABB(pos))) {
 			stepAside(body, pos);
 			if (++stuck > 60) skip("kept standing in the way");
 			return;
 		}
-		stuck = 0;
 		Item item = want.getBlock().asItem();
 		if (item == null || item == Items.AIR) {
 			skip("no item places " + BlockCodec.id(want, BlockCodec.Detail.NONE));
 			return;
 		}
-		if (!body.placeFromInventory(pos, want, st -> st.is(item))) {
-			missing.merge(Views.stack(new ItemStack(item)), 1, Integer::sum);
-			finish();
-			return;
+		switch (body.placeFromInventory(pos, want, st -> st.is(item))) {
+			case PLACED -> {
+				BlockState now = body.level().getBlockState(pos);
+				if (!current.spec().matches(now)) {
+					// The block changed itself on placement (water flowing in, say).
+					if (failed.size() < 10) failed.add(pos.toShortString() + ": placed " + BlockCodec.id(now) + " instead of " + BlockCodec.id(want));
+				} else {
+					placed++;
+				}
+				cooldown = PLACE_TICKS;
+				finish();
+			}
+			case NO_ITEM -> {
+				missing.merge(Views.stack(new ItemStack(item)), Body.itemsFor(want), Integer::sum);
+				finish();
+			}
+			case BLOCKED -> {
+				// A player or a mob is standing there. Give them a moment to move.
+				if (++stuck > 100) skip("someone was standing there");
+				else cooldown = 5;
+			}
+			case PROTECTED -> skip("protected spawn area");
+			case FAILED -> skip("couldn't place " + BlockCodec.id(want, BlockCodec.Detail.NONE));
 		}
-		BlockState now = body.level().getBlockState(pos);
-		if (!current.spec().matches(now)) {
-			// The block changed itself on placement (a door half without its other half, water flowing in).
-			if (failed.size() < 10) failed.add(pos.toShortString() + ": placed " + BlockCodec.id(now) + " instead of " + BlockCodec.id(want));
-		} else {
-			placed++;
-		}
-		cooldown = PLACE_TICKS;
-		finish();
 	}
 
 	private void finish() {
 		current = null;
+		breaking = null;
 		stuck = 0;
 		approachTicks = 0;
 	}
@@ -200,7 +222,6 @@ public final class BuildIntent extends Intent {
 				}
 			}
 			jobs.remove(best);
-			if (best.spec().matches(body.level().getBlockState(best.pos()))) continue; // already right
 			current = best;
 			return true;
 		}
@@ -237,7 +258,7 @@ public final class BuildIntent extends Intent {
 			if (j.spec().state().isAir()) continue;
 			Item item = j.spec().state().getBlock().asItem();
 			if (item == null) continue;
-			need.merge(Views.stack(new ItemStack(item)), 1, Integer::sum);
+			need.merge(Views.stack(new ItemStack(item)), Body.itemsFor(j.spec().state()), Integer::sum);
 		}
 		Map<String, Integer> have = new LinkedHashMap<>();
 		for (ItemStack st : body.agent.getInventory().getNonEquipmentItems()) {

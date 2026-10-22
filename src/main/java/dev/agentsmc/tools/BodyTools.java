@@ -323,14 +323,14 @@ public final class BodyTools {
 					Body body = a.body();
 					ServerLevel level = a.level();
 					BlockPos pos = new BlockPos(args.integer("x"), args.integer("y"), args.integer("z"));
+					Vec3 centre = Vec3.atCenterOf(pos);
+					if (a.position().distanceTo(centre) > PLACE_RANGE) {
+						throw new ToolException(String.format(Locale.ROOT, "Too far: %s is %s. goto a spot within %.0f blocks first.", pos.toShortString(), Senses.relative(a, centre), PLACE_RANGE));
+					}
 					BlockState there = level.getBlockState(pos);
 					if (!there.canBeReplaced()) throw new ToolException(pos.toShortString() + " already has " + BlockCodec.id(there));
 					if (a.getBoundingBox().intersects(new net.minecraft.world.phys.AABB(pos)) && !a.isCreative()) {
 						throw new ToolException("You're standing there. Step aside first.");
-					}
-					Vec3 centre = Vec3.atCenterOf(pos);
-					if (a.position().distanceTo(centre) > PLACE_RANGE) {
-						throw new ToolException(String.format(Locale.ROOT, "Too far: %s is %s. goto a spot within %.0f blocks first.", pos.toShortString(), Senses.relative(a, centre), PLACE_RANGE));
 					}
 					String item = args.str("item").trim().toLowerCase(Locale.ROOT);
 					if (!body.hold(stack -> matches(stack, item))) throw new ToolException("No " + item + " in the inventory. " + inventory(a));
@@ -347,7 +347,14 @@ public final class BodyTools {
 						state = blockItem.getBlock().getStateForPlacement(new BlockPlaceContext(a, InteractionHand.MAIN_HAND, held, hit));
 						if (state == null) state = blockItem.getBlock().defaultBlockState();
 					}
-					if (!body.placeFromInventory(pos, state, stack -> matches(stack, item))) throw new ToolException("Couldn't place " + item + " at " + pos.toShortString() + ".");
+					switch (body.placeFromInventory(pos, state, stack -> matches(stack, item))) {
+						case PLACED -> {
+						}
+						case NO_ITEM -> throw new ToolException("Not enough " + item + " for " + BlockCodec.id(state) + " (it takes " + Body.itemsFor(state) + "). " + inventory(a));
+						case BLOCKED -> throw new ToolException("Someone or something is standing at " + pos.toShortString() + ".");
+						case PROTECTED -> throw new ToolException(pos.toShortString() + " is in the protected spawn area.");
+						case FAILED -> throw new ToolException("Couldn't place " + item + " at " + pos.toShortString() + ".");
+					}
 					return "Placed " + BlockCodec.id(level.getBlockState(pos)) + " at " + AgentsMcXyz(pos) + ".";
 				}));
 

@@ -497,7 +497,7 @@ public final class Body {
 			BlockPos pos = feet.relative(d);
 			BlockState at = agent.level().getBlockState(pos);
 			if (!at.isAir() || !agent.level().getBlockState(pos.below()).isFaceSturdy(agent.level(), pos.below(), Direction.UP)) continue;
-			if (placeFromInventory(pos, net.minecraft.world.level.block.Blocks.TORCH.defaultBlockState(), s -> s.is(net.minecraft.world.item.Items.TORCH))) {
+			if (placeFromInventory(pos, net.minecraft.world.level.block.Blocks.TORCH.defaultBlockState(), s -> s.is(net.minecraft.world.item.Items.TORCH)) == Placed.PLACED) {
 				lastTorch = pos;
 				return;
 			}
@@ -506,39 +506,74 @@ public final class Body {
 
 	// ---- placing and picking up -----------------------------------------------------------------
 
+	/** What came of trying to place a block. */
+	public enum Placed {
+		PLACED, NO_ITEM, BLOCKED, PROTECTED, FAILED
+	}
+
 	/**
-	 * Puts {@code state} at {@code pos} out of the inventory, using up one item that {@code item}
-	 * accepts. A player needs a block to click and a clear view of it; the body only needs the item,
-	 * which is the part that matters: what it builds, it gathered. Plays the place sound and swings.
+	 * Puts {@code state} at {@code pos} out of the inventory, using up the items it costs (one, or two
+	 * for a double slab, four for four candles) from a stack {@code item} accepts. The item's data goes
+	 * with it, so a shulker box keeps its contents and a named chest its name, and the block gets its
+	 * placement callback, which adds a door's upper half or a bed's head. A player needs a block to
+	 * click and a clear view of it; the body only needs the item, which is the part that matters:
+	 * what it builds, it gathered. Nothing is placed inside a player or a mob.
 	 */
-	public boolean placeFromInventory(BlockPos pos, BlockState state, Predicate<ItemStack> item) {
-		if (!mayInteract(pos)) return false;
+	public Placed placeFromInventory(BlockPos pos, BlockState state, Predicate<ItemStack> item) {
+		var level = agent.level();
+		if (!mayInteract(pos)) return Placed.PROTECTED;
+		if (!level.isUnobstructed(state, pos, net.minecraft.world.phys.shapes.CollisionContext.empty())) return Placed.BLOCKED;
+		int cost = agent.isCreative() ? 0 : itemsFor(state);
 		var inv = agent.getInventory();
 		int slot = -1;
 		for (int i = 0; i < inv.getContainerSize() && slot < 0; i++) {
 			ItemStack st = inv.getItem(i);
-			if (!st.isEmpty() && item.test(st)) slot = i;
+			if (!st.isEmpty() && item.test(st) && st.getCount() >= Math.max(cost, 1)) slot = i;
 		}
-		if (slot < 0) return false;
-		var level = agent.level();
-		if (!level.setBlock(pos, state, net.minecraft.world.level.block.Block.UPDATE_ALL)) return false;
-		if (!agent.isCreative()) inv.getItem(slot).shrink(1);
-		var sound = state.getSoundType();
+		if (slot < 0) return Placed.NO_ITEM;
+		ItemStack stack = inv.getItem(slot);
+		ItemStack used = stack.copyWithCount(1);
+		if (!level.setBlock(pos, state, net.minecraft.world.level.block.Block.UPDATE_ALL)) return Placed.FAILED;
+		BlockState placed = level.getBlockState(pos);
+		net.minecraft.world.level.block.entity.BlockEntity be = level.getBlockEntity(pos);
+		if (be != null) be.applyComponentsFromItemStack(used);
+		placed.getBlock().setPlacedBy(level, pos, placed, agent, used);
+		stack.shrink(cost);
+		var sound = placed.getSoundType();
 		level.playSound(null, pos, sound.getPlaceSound(), net.minecraft.sounds.SoundSource.BLOCKS, (sound.getVolume() + 1) / 2, sound.getPitch() * 0.8f);
 		face(Vec3.atCenterOf(pos));
 		swingArm();
-		return true;
+		return Placed.PLACED;
+	}
+
+	/** How many of its item a block state is worth: a double slab is two slabs, four candles are four. */
+	public static int itemsFor(BlockState state) {
+		if (state.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.SLAB_TYPE)
+				&& state.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.SLAB_TYPE) == net.minecraft.world.level.block.state.properties.SlabType.DOUBLE) return 2;
+		for (var p : new net.minecraft.world.level.block.state.properties.IntegerProperty[]{
+				net.minecraft.world.level.block.state.properties.BlockStateProperties.CANDLES,
+				net.minecraft.world.level.block.state.properties.BlockStateProperties.PICKLES,
+				net.minecraft.world.level.block.state.properties.BlockStateProperties.EGGS,
+				net.minecraft.world.level.block.state.properties.BlockStateProperties.LAYERS}) {
+			if (state.hasProperty(p)) return state.getValue(p);
+		}
+		return 1;
 	}
 
 	/**
-	 * Takes every item drop inside {@code box} into the inventory, pickup delay or not. Drops near the
-	 * body, and the drops of a block it just broke, come to it instead of being chased.
+	 * Takes item drops inside {@code box} into the inventory, pickup delay or not. Drops near the body,
+	 * and the drops of a block it just broke, come to it instead of being chased. What a player just
+	 * dropped stays theirs for the moment, as vanilla's own delay makes it. At most sixteen a tick,
+	 * so a spill is taken over a few ticks rather than stalling one.
 	 */
 	public void gatherDrops(net.minecraft.world.phys.AABB box) {
 		if (agent.isSpectator() || !agent.isAlive()) return;
+		int budget = 16;
 		for (net.minecraft.world.entity.item.ItemEntity e : agent.level().getEntitiesOfClass(net.minecraft.world.entity.item.ItemEntity.class, box, net.minecraft.world.entity.item.ItemEntity::isAlive)) {
+			if (--budget < 0) break;
 			ItemStack st = e.getItem();
 			if (st.isEmpty() || e.getAge() >= 5990) continue; // /give's animation-only item is born one tick from despawning; never a real drop
+			if (e.hasPickUpDelay() && e.getOwner() instanceof net.minecraft.world.entity.player.Player owner && owner != agent) continue;
 			int before = st.getCount();
 			agent.getInventory().add(st); // takes what fits, leaving the rest in the stack
 			int took = before - st.getCount();
@@ -550,8 +585,9 @@ public final class Body {
 
 	/**
 	 * Breaks the block at {@code pos} at once, as if mined with the best tool carried, with its drops
-	 * going into the inventory (what doesn't fit drops where the block was). The tool wears as it
-	 * would. For build jobs, which take blocks out at a distance.
+	 * going into the inventory (what doesn't fit drops where the block was). Mining's own rules hold:
+	 * no drops without the right tool, the tool wears, the body tires. For build jobs, which take
+	 * blocks out at a distance after waiting out the break time.
 	 */
 	public void removeToInventory(BlockPos pos) {
 		var level = agent.level();
@@ -559,7 +595,8 @@ public final class Body {
 		if (state.isAir() || !mayInteract(pos)) return;
 		holdToolFor(state);
 		ItemStack tool = agent.getMainHandItem();
-		List<ItemStack> drops = net.minecraft.world.level.block.Block.getDrops(state, level, pos, level.getBlockEntity(pos), agent, tool);
+		List<ItemStack> drops = agent.hasCorrectToolForDrops(state)
+				? net.minecraft.world.level.block.Block.getDrops(state, level, pos, level.getBlockEntity(pos), agent, tool) : List.of();
 		face(Vec3.atCenterOf(pos));
 		swingArm();
 		if (!level.destroyBlock(pos, false, agent, 512)) return;
@@ -567,7 +604,11 @@ public final class Body {
 			agent.getInventory().add(d);
 			if (!d.isEmpty()) net.minecraft.world.level.block.Block.popResource(level, pos, d);
 		}
-		if (tool.isDamageableItem() && !agent.isCreative()) tool.hurtAndBreak(1, agent, net.minecraft.world.entity.EquipmentSlot.MAINHAND);
+		gatherDrops(new net.minecraft.world.phys.AABB(pos).inflate(1.5)); // a chest's contents, say
+		if (!agent.isCreative()) {
+			tool.mineBlock(level, state, pos, agent);
+			agent.causeFoodExhaustion(0.005f);
+		}
 	}
 
 	// ---- events ---------------------------------------------------------------------------------
